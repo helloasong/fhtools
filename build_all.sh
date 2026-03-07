@@ -60,9 +60,9 @@ fi
 # 安装依赖
 echo ""
 echo "步骤 2/5: 安装依赖..."
-pip install --upgrade pip -q
-pip install pyinstaller -q
-pip install -r requirements.txt -q
+python -m pip install --upgrade pip -q
+python -m pip install pyinstaller -q
+python -m pip install -r requirements.txt -q
 
 # 清理旧的构建
 echo ""
