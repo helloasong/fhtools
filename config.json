@@ -1,0 +1,8 @@
+{
+  "theme": "light_blue.xml",
+  "initial_bins": 64,
+  "default_max_bins": 5,
+  "export_dir": "exports",
+  "missing_strategy": "separate",
+  "qss": "style.qss"
+}

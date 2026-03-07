@@ -1,0 +1,64 @@
+/* 全局明亮风格与圆角、渐变、阴影（阴影需代码设置 QGraphicsDropShadowEffect） */
+
+QWidget {
+  background: #F7F9FC;
+  color: #333;
+  font-size: 12px;
+}
+
+QWidget[card="true"] {
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFFFFF, stop:1 #F4F7FB);
+  border: 1px solid #E3E6EA;
+  border-radius: 10px;
+}
+
+QLabel[title="true"] {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+QPushButton {
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #E8EEF6, stop:1 #D9E4F5);
+  border: 1px solid #C9D6EA;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+QPushButton:hover {
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #F0F5FB, stop:1 #E2ECFA);
+}
+QPushButton:pressed {
+  background: #D0DBEF;
+}
+
+QComboBox, QSpinBox, QLineEdit {
+  background: #FFFFFF;
+  border: 1px solid #D7DEE8;
+  border-radius: 8px;
+  padding: 4px 6px;
+}
+
+QTableView {
+  background: #FFFFFF;
+  border: 1px solid #E3E6EA;
+  border-radius: 8px;
+  gridline-color: #EEF1F5;
+}
+QHeaderView::section {
+  background: #F3F6FA;
+  border: 1px solid #E3E6EA;
+  padding: 4px;
+}
+/* 左侧导航美化 */
+QListWidget {
+  background: #FFFFFF;
+  border-right: 1px solid #E3E6EA;
+  font-size: 15px;
+}
+QListWidget::item {
+  padding: 10px 12px;
+}
+QListWidget::item:selected {
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #EAF2FE, stop:1 #DDE9FD);
+  border-radius: 10px;
+  color: #1A73E8;
+}
