@@ -1,23 +1,96 @@
+# ==========================================
 # Python
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
 
+# ==========================================
 # Virtual environments
+# ==========================================
 venv/
 env/
+ENV/
 .env
+.venv
 
+# ==========================================
 # IDEs
+# ==========================================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
-# Distribution / packaging
-dist/
-build/
+# ==========================================
+# Build / Distribution / Packaging
+# ==========================================
+# PyInstaller
+/dist/
+/build/
+*.spec
+!FHBinningTool.spec
+!FHBinningTool_windows.spec
+!FHBinningTool_windows_onefile.spec
+!FHBinningTool_linux.spec
+
+# Python packaging
 *.egg-info/
+.eggs/
+*.egg
+*.manifest
+*.spec
 
-# Data
+# ==========================================
+# Release packages
+# ==========================================
+/release/
+*.zip
+*.tar.gz
+*.dmg
+*.exe
+*.app
+
+# ==========================================
+# Data files
+# ==========================================
 *.csv
 *.xlsx
-data/
+*.xls
+*.parquet
+/data/
+
+# ==========================================
+# Project specific
+# ==========================================
+# User projects and exports
+/projects/
+/exports/
+
+# Logs
+*.log
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
