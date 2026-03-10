@@ -1,6 +1,11 @@
+# 必须在任何其他 import 之前执行！
+# 禁用 NumPy AVX2 优化，兼容云桌面/虚拟 CPU（不支持 X86_V2 指令集）
+import os
+os.environ['NPY_ENABLE_CPU_FEATURES'] = ''
+os.environ['NPY_DISABLE_CPU_FEATURES'] = 'AVX2,AVX512F,FMA3,SSE41,SSE42'
+
 import sys
 import json
-import os
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
