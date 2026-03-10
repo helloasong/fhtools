@@ -10,6 +10,10 @@
 #   pyinstaller FHBinningTool_windows_enterprise.spec
 #
 # 输出目录：dist/FHBinningTool_enterprise/
+#
+# 重要：如果目标机器 CPU 不支持 AVX2（如云桌面），需要重新打包：
+#   方法1：使用本 spec 文件（已包含 CPU 兼容钩子）
+#   方法2：降级 numpy: pip install "numpy<2.0"
 
 import sys
 import os
@@ -42,7 +46,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['scripts/runtime_hook_cpu_compat.py'],
     excludes=[
         'tkinter',
         'matplotlib.backends.backend_tkagg',

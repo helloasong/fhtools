@@ -1,0 +1,33 @@
+# 兼容旧 CPU 的依赖配置（如云桌面、虚拟机等）
+# 
+# 问题：NumPy 2.x 默认使用 AVX2 等现代指令集优化
+# 解决：降级到 NumPy 1.x，或使用无优化版本
+#
+# 使用方法：
+#   pip install -r requirements-legacy-cpu.txt
+#
+# 注意：打包前必须先安装此依赖，覆盖标准 requirements.txt
+
+# Core dependencies - 兼容旧 CPU 版本
+pandas>=2.0.0
+numpy==1.24.4        # 固定 1.x 版本，避免 AVX2 指令集问题
+scikit-learn>=1.2.0
+scipy==1.10.1        # 与 numpy 1.24 兼容
+
+# GUI Framework
+PyQt6>=6.4.0
+qt-material>=2.14
+pyqtgraph>=0.13.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Excel I/O
+openpyxl>=3.1.0
+
+# Build tool (optional, for packaging)
+pyinstaller>=6.0.0
+
+# Development tools (optional)
+jupyterlab>=4.0.0
