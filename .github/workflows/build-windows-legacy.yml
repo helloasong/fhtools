@@ -1,0 +1,67 @@
+name: Build Windows (Legacy CPU Compatible)
+
+# 为云桌面/虚拟机打包（兼容无 AVX2 的 CPU）
+# 使用 NumPy 1.x 避免 X86_V2 指令集问题
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如: 1.0.0)'
+        required: false
+        default: ''
+
+jobs:
+  build-windows-legacy:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies (Legacy CPU compatible)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # 关键：使用兼容旧 CPU 的依赖（NumPy 1.24.4）
+          pip install -r requirements-legacy-cpu.txt
+          pip list
+
+      - name: Build Windows executable
+        run: |
+          pyinstaller FHBinningTool_windows_enterprise.spec
+
+      - name: Package artifact
+        run: |
+          $version = "${{ github.event.inputs.version }}"
+          if ([string]::IsNullOrEmpty($version)) {
+            $version = "${{ github.ref_name }}"
+          }
+          $zipName = "FHBinningTool-v${version}-windows-x86_64-legacy.zip"
+          Compress-Archive -Path "dist/FHBinningTool_enterprise/*" -DestinationPath $zipName
+          Move-Item $zipName release/
+        shell: pwsh
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FHBinningTool-windows-legacy-cpu
+          path: release/*.zip
+          retention-days: 90
+
+      # Release 时自动上传
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
