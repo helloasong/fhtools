@@ -36,6 +36,7 @@ ENV/
 !FHBinningTool.spec
 !FHBinningTool_windows.spec
 !FHBinningTool_windows_onefile.spec
+!FHBinningTool_windows_enterprise.spec
 !FHBinningTool_linux.spec
 
 # Python packaging
@@ -43,7 +44,7 @@ ENV/
 .eggs/
 *.egg
 *.manifest
-*.spec
+# *.spec  # 注释掉，避免覆盖前面的白名单规则
 
 # ==========================================
 # Release packages
