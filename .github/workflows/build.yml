@@ -4,8 +4,8 @@ name: Build All Platforms
 # 对于云桌面/虚拟机（无 AVX2），请使用 build-windows-legacy.yml
 
 on:
-  push:
-    branches: [main, master]
+  # push 时不再自动触发，避免重复构建
+  # 使用 build-windows-legacy.yml 进行常规 Windows 打包
   pull_request:
     branches: [main, master]
   workflow_dispatch:
