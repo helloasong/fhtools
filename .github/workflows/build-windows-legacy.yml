@@ -44,13 +44,23 @@ jobs:
 
       - name: Package artifact
         run: |
+          # 创建 release 目录
+          New-Item -ItemType Directory -Force -Path release
+          
           $version = "${{ github.event.inputs.version }}"
           if ([string]::IsNullOrEmpty($version)) {
             $version = "${{ github.ref_name }}"
           }
           $zipName = "FHBinningTool-v${version}-windows-x86_64-legacy.zip"
-          Compress-Archive -Path "dist/FHBinningTool_enterprise/*" -DestinationPath $zipName
-          Move-Item $zipName release/
+          
+          # 检查打包输出
+          if (Test-Path "dist/FHBinningTool_enterprise") {
+            Compress-Archive -Path "dist/FHBinningTool_enterprise/*" -DestinationPath "release/$zipName"
+            Write-Host "Created: release/$zipName"
+          } else {
+            Write-Error "Build output not found: dist/FHBinningTool_enterprise"
+            exit 1
+          }
         shell: pwsh
 
       - name: Upload Windows build
