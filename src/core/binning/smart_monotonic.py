@@ -191,8 +191,9 @@ class SmartMonotonicBinner(BaseBinner):
             # 强制单调合并
             forced_result = self._force_monotonic_merge(x, y, splits, target_trend, min_bins)
             n_forced_bins = len(forced_result['splits']) - 1
+            is_forced_mono = forced_result.get('is_monotonic', False)
             
-            if n_forced_bins >= min_bins:
+            if n_forced_bins >= min_bins and is_forced_mono:
                 iv_loss = (original_iv - forced_result['iv']) / original_iv if original_iv > 0 else 0
                 
                 if iv_loss <= iv_tolerance:
@@ -201,26 +202,27 @@ class SmartMonotonicBinner(BaseBinner):
                     self._adjustment_method = 'merge'
                     self._is_monotonic = True
                     self._splits = forced_result['splits']
-                    self._log(f"合并调整成功: {n_forced_bins}箱(原{len(splits)-1}箱)，IV损失={iv_loss:.1%}")
+                    self._log(f"合并调整成功: {n_forced_bins}箱(原{len(splits)-1}箱)，单调=True, IV损失={iv_loss:.1%}")
                     return self
                 else:
-                    self._log(f"合并调整IV损失{iv_loss:.1%}>{iv_tolerance:.1%}，尝试更少箱数")
+                    self._log(f"合并调整IV损失{iv_loss:.1%}>{iv_tolerance:.1%}，单调={is_forced_mono}，尝试更少箱数")
                     if best_result is None or iv_loss < best_result['iv_loss']:
                         best_result = {
                             'splits': forced_result['splits'],
                             'iv': forced_result['iv'],
                             'original_iv': original_iv,
                             'iv_loss': iv_loss,
-                            'bins': n_forced_bins
+                            'bins': n_forced_bins,
+                            'is_monotonic': is_forced_mono
                         }
         
-        if best_result:
+        if best_result and best_result.get('is_monotonic', False):
             self._original_iv = best_result['original_iv']
             self._final_iv = best_result['iv']
             self._adjustment_method = 'merge'
             self._is_monotonic = True
             self._splits = best_result['splits']
-            self._log(f"合并调整(超容忍度): {best_result['bins']}箱，IV损失={best_result['iv_loss']:.1%}")
+            self._log(f"合并调整(超容忍度): {best_result['bins']}箱，单调=True, IV损失={best_result['iv_loss']:.1%}")
             return self
         
         return self._apply_fallback(x, y)
@@ -254,16 +256,16 @@ class SmartMonotonicBinner(BaseBinner):
             # PAVA平滑
             pava_result = self._pava_smooth_bins(x, y, splits, target_trend)
             
-            if len(pava_result['splits']) - 1 >= min_bins:
+            if len(pava_result['splits']) - 1 >= min_bins and pava_result.get('is_monotonic', False):
                 iv_loss = (original_iv - pava_result['iv']) / original_iv if original_iv > 0 else 0
                 
                 if iv_loss <= iv_tolerance:
                     self._original_iv = original_iv
                     self._final_iv = pava_result['iv']
                     self._adjustment_method = 'pava'
-                    self._is_monotonic = True
+                    self._is_monotonic = pava_result['is_monotonic']
                     self._splits = pava_result['splits']
-                    self._log(f"PAVA平滑成功: {len(pava_result['splits'])-1}箱，IV损失={iv_loss:.1%}")
+                    self._log(f"PAVA平滑成功: {len(pava_result['splits'])-1}箱，单调={pava_result['is_monotonic']}, IV损失={iv_loss:.1%}")
                     return self
                 else:
                     self._log(f"PAVA平滑IV损失{iv_loss:.1%}>{iv_tolerance:.1%}，尝试更少箱数")
@@ -272,16 +274,17 @@ class SmartMonotonicBinner(BaseBinner):
                             'splits': pava_result['splits'],
                             'iv': pava_result['iv'],
                             'original_iv': original_iv,
-                            'iv_loss': iv_loss
+                            'iv_loss': iv_loss,
+                            'is_monotonic': pava_result.get('is_monotonic', False)
                         }
         
         if best_result:
             self._original_iv = best_result['original_iv']
             self._final_iv = best_result['iv']
             self._adjustment_method = 'pava'
-            self._is_monotonic = True
+            self._is_monotonic = best_result.get('is_monotonic', False)
             self._splits = best_result['splits']
-            self._log(f"PAVA平滑(超容忍度): IV损失={best_result['iv_loss']:.1%}")
+            self._log(f"PAVA平滑(超容忍度): 单调={best_result.get('is_monotonic', False)}, IV损失={best_result['iv_loss']:.1%}")
             return self
         
         return self._apply_fallback(x, y)
@@ -467,7 +470,7 @@ class SmartMonotonicBinner(BaseBinner):
             return {'splits': splits, 'iv': self._calculate_iv(x, y, splits)}
         
         iteration = 0
-        while len(stats) > min_bins:
+        while len(stats) > 2:  # 至少保留2箱，但优先保证单调
             rates = [s['bad_rate'] for s in stats]
             if self._is_monotonic_list(rates, target_trend):
                 break
@@ -482,6 +485,24 @@ class SmartMonotonicBinner(BaseBinner):
             if iteration > 50:
                 break
         
+        # 如果还不单调且箱数>2，强制继续合并到2箱（保底单调）
+        while len(stats) > 2:
+            rates = [s['bad_rate'] for s in stats]
+            if self._is_monotonic_list(rates, target_trend):
+                break
+            
+            # 强制合并第一个违反点
+            best_idx = 0
+            for i in range(len(stats) - 1):
+                if target_trend == 'ascending' and stats[i]['bad_rate'] > stats[i+1]['bad_rate']:
+                    best_idx = i
+                    break
+                elif target_trend == 'descending' and stats[i]['bad_rate'] < stats[i+1]['bad_rate']:
+                    best_idx = i
+                    break
+            
+            stats = self._merge_stats(stats, best_idx)
+        
         if len(stats) >= 2:
             split_points = [stats[i]['right'] for i in range(len(stats)-1)]
             new_splits = [-np.inf] + split_points + [np.inf]
@@ -489,7 +510,9 @@ class SmartMonotonicBinner(BaseBinner):
             new_splits = [-np.inf, np.inf]
         
         iv = self._calculate_iv(x, y, new_splits)
-        return {'splits': new_splits, 'iv': iv}
+        final_rates = [s['bad_rate'] for s in stats]
+        is_monotonic = self._is_monotonic_list(final_rates, target_trend)
+        return {'splits': new_splits, 'iv': iv, 'is_monotonic': is_monotonic, 'n_bins': len(stats)}
     
     def _find_best_merge_idx(self, stats: List[dict], target_trend: str) -> Optional[int]:
         """找到最佳合并点（最小IV损失）"""
@@ -542,9 +565,73 @@ class SmartMonotonicBinner(BaseBinner):
     
     def _pava_smooth_bins(self, x: pd.Series, y: pd.Series, splits: List[float],
                           target_trend: str) -> dict:
-        """使用PAVA算法平滑分箱结果"""
-        iv = self._calculate_iv(x, y, splits)
-        return {'splits': splits, 'iv': iv}
+        """使用PAVA算法平滑分箱结果
+        
+        通过合并相邻违反单调性的箱，强制实现单调性。
+        与merge不同，PAVA会智能选择合并点，尽量保持IV。
+        """
+        try:
+            x_binned = pd.cut(x, bins=splits, include_lowest=True)
+        except:
+            return {'splits': splits, 'iv': self._calculate_iv(x, y, splits), 'is_monotonic': False}
+        
+        df = pd.DataFrame({'bin': x_binned, 'y': y})
+        
+        # 计算每箱统计
+        stats = []
+        for name, group in df.groupby('bin', observed=False):
+            if len(group) > 0:
+                stats.append({
+                    'left': float(name.left) if hasattr(name, 'left') else name,
+                    'right': float(name.right) if hasattr(name, 'right') else name,
+                    'count': len(group),
+                    'events': group['y'].sum(),
+                    'bad_rate': group['y'].mean()
+                })
+        
+        if len(stats) <= 2:
+            iv = self._calculate_iv(x, y, splits)
+            is_mono = self._is_monotonic_list([s['bad_rate'] for s in stats], target_trend)
+            return {'splits': splits, 'iv': iv, 'is_monotonic': is_mono}
+        
+        # PAVA算法：迭代合并直到单调
+        max_iterations = len(stats) * 2
+        for iteration in range(max_iterations):
+            rates = [s['bad_rate'] for s in stats]
+            if self._is_monotonic_list(rates, target_trend):
+                break
+            
+            # 找到第一个违反点并合并
+            violate_idx = None
+            for i in range(len(stats) - 1):
+                if target_trend == 'ascending':
+                    if stats[i]['bad_rate'] > stats[i+1]['bad_rate'] + 1e-10:
+                        violate_idx = i
+                        break
+                else:
+                    if stats[i]['bad_rate'] < stats[i+1]['bad_rate'] - 1e-10:
+                        violate_idx = i
+                        break
+            
+            if violate_idx is None:
+                break
+            
+            # 合并violate_idx和violate_idx+1
+            stats = self._merge_stats(stats, violate_idx)
+        
+        # 构建新切点
+        if len(stats) >= 2:
+            split_points = [stats[i]['right'] for i in range(len(stats)-1)]
+            new_splits = [-np.inf] + split_points + [np.inf]
+        else:
+            new_splits = [-np.inf, np.inf]
+        
+        # 检查最终是否单调
+        final_rates = [s['bad_rate'] for s in stats]
+        is_monotonic = self._is_monotonic_list(final_rates, target_trend)
+        
+        iv = self._calculate_iv(x, y, new_splits)
+        return {'splits': new_splits, 'iv': iv, 'is_monotonic': is_monotonic}
     
     def _pava_smooth(self, values: np.ndarray) -> np.ndarray:
         """PAVA算法实现"""
