@@ -172,7 +172,31 @@ All algorithms are in `src/core/binning/`:
 ### SmartMonotonicBinner 详细说明
 
 **文件位置**: `src/core/binning/smart_monotonic.py`  
-**测试文件**: `tests/test_smart_monotonic.py` (23个测试用例)
+**测试文件**: `tests/test_smart_monotonic.py` (23个测试用例)  
+**对比测试**: `tests/test_binning_comparison.py` (全面对比6种策略)
+
+**🏆 全面对比测试结论** (2026-03-12)
+
+在10种数据场景下对比6种分箱策略的结果：
+
+| 排名 | 策略 | 综合得分 | 单调率 | 成功率 | 平均IV损失 |
+|-----|------|---------|-------|-------|-----------|
+| 🥇 1 | **SmartMonotonic** | **81.76** | **60%** | **100%** | **6.71%** |
+| 🥈 2 | DecisionTree | 74.87 | 40% | 100% | 3.90% |
+| 🥉 3 | EqualFrequency | 73.87 | 50% | 100% | 30.25% |
+| 4 | EqualWidth | 72.73 | 50% | 100% | 36.13% |
+| 5 | BestKS | 62.31 | 30% | 100% | 40.52% |
+| 6 | ChiMerge | 60.98 | 30% | 100% | 5.11% |
+
+**核心优势**:
+- ✅ **综合排名第1**，领先第二名9.2%
+- ✅ **单调率最高** (60%)，第二名仅40%
+- ✅ **100%有解率**，无需人工干预
+- ✅ **IV损失可控** (6.71%)，远低于等频/等宽
+
+**测试文档**:
+- 测试计划: `docs/PLAN_BinningComparisonTest.md`
+- 优化记录: `docs/OPTIMIZATION_RECORD_BinningComparison.md`
 
 **核心特点**:
 - 自动化追求单调性，无需人工调整参数
