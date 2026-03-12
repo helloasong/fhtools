@@ -1,0 +1,77 @@
+================================================================================
+分箱策略对比测试报告
+测试时间: 2026-03-12 18:56:49
+================================================================================
+
+【综合排名】
+                成功率  单调率    平均IV  平均IV损失  平均耗时(ms)  平均箱数   综合得分
+策略                                                             
+SmartMonotonic  1.0  0.6  0.9480  0.0671   11.9146   4.7  81.76
+DecisionTree    1.0  0.4  0.9594  0.0390    4.6363   5.0  74.87
+EqualFrequency  1.0  0.5  0.8269  0.3025    1.0435   5.0  73.87
+EqualWidth      1.0  0.5  0.7545  0.3613    0.5246   5.0  72.73
+BestKS          1.0  0.3  0.7051  0.4052   21.1391   5.0  62.31
+ChiMerge        1.0  0.3  0.9290  0.0511  133.1210   5.0  60.98
+
+【详细结果】
+                策略                    场景    成功  箱数     单调        IV      IV损失      耗时(ms)   调整方法
+0   EqualFrequency   01_linear_monotonic  True   5   True  1.437559  0.060033    1.402855       
+1       EqualWidth   01_linear_monotonic  True   5   True  1.309244  0.143934    0.581264       
+2     DecisionTree   01_linear_monotonic  True   5   True  1.529372  0.000000    5.161047       
+3         ChiMerge   01_linear_monotonic  True   5   True  1.490269  0.025568  137.485981       
+4           BestKS   01_linear_monotonic  True   5   True  1.001208  0.345347   20.613194       
+5   SmartMonotonic   01_linear_monotonic  True   5   True  1.529372  0.000000    9.258986   none
+6   EqualFrequency         02_weak_noisy  True   5  False  0.024523  0.377799    0.999212       
+7       EqualWidth         02_weak_noisy  True   5   True  0.029475  0.252173    0.526190       
+8     DecisionTree         02_weak_noisy  True   5   True  0.039333  0.002054    5.186081       
+9         ChiMerge         02_weak_noisy  True   5  False  0.039414  0.000000  133.873224       
+10          BestKS         02_weak_noisy  True   5  False  0.017128  0.565431   20.087004       
+11  SmartMonotonic         02_weak_noisy  True   4   True  0.034775  0.117703   13.417006  merge
+12  EqualFrequency           03_u_shaped  True   5  False  0.706966  0.097222    1.152039       
+13      EqualWidth           03_u_shaped  True   5  False  0.644199  0.177373    0.532866       
+14    DecisionTree           03_u_shaped  True   5  False  0.775445  0.009775    5.676746       
+15        ChiMerge           03_u_shaped  True   5  False  0.783100  0.000000  135.655880       
+16          BestKS           03_u_shaped  True   5  False  0.237745  0.696406   11.992216       
+17  SmartMonotonic           03_u_shaped  True   5  False  0.775445  0.009775   14.851093   pava
+18  EqualFrequency          04_long_tail  True   5   True  1.352628  0.089580    1.016140       
+19      EqualWidth          04_long_tail  True   5   True  0.581774  0.608423    0.517845       
+20    DecisionTree          04_long_tail  True   5   True  1.485719  0.000000    4.782915       
+21        ChiMerge          04_long_tail  True   5   True  1.466365  0.013027  135.366201       
+22          BestKS          04_long_tail  True   5   True  1.011460  0.319212   22.449970       
+23  SmartMonotonic          04_long_tail  True   5   True  1.485719  0.000000    9.140968   none
+24  EqualFrequency            05_bimodal  True   5  False  1.375592  0.195517    1.004696       
+25      EqualWidth            05_bimodal  True   5  False  1.694816  0.008826    0.536680       
+26    DecisionTree            05_bimodal  True   5  False  1.709908  0.000000    4.314184       
+27        ChiMerge            05_bimodal  True   5  False  1.708499  0.000824  131.785870       
+28          BestKS            05_bimodal  True   5  False  1.703863  0.003536   18.708944       
+29  SmartMonotonic            05_bimodal  True   5  False  1.708864  0.000611   14.142036   pava
+30  EqualFrequency       06_small_sample  True   5   True  0.882743  0.222232    0.637293       
+31      EqualWidth       06_small_sample  True   5   True  0.863700  0.239011    0.380993       
+32    DecisionTree       06_small_sample  True   5  False  1.134971  0.000000    1.122713       
+33        ChiMerge       06_small_sample  True   5  False  0.966243  0.148662  128.001928       
+34          BestKS       06_small_sample  True   5  False  0.799687  0.295412   18.041134       
+35  SmartMonotonic       06_small_sample  True   4   True  1.081477  0.047132    7.071018  merge
+36  EqualFrequency   07_high_cardinality  True   5  False  0.001357  0.946497    0.900745       
+37      EqualWidth   07_high_cardinality  True   5  False  0.001385  0.945377    0.514746       
+38    DecisionTree   07_high_cardinality  True   5  False  0.017394  0.314027    4.898071       
+39        ChiMerge   07_high_cardinality  True   5  False  0.025356  0.000000  132.970095       
+40          BestKS   07_high_cardinality  True   5   True  0.004212  0.833895   27.279854       
+41  SmartMonotonic   07_high_cardinality  True   5  False  0.013682  0.460424   14.308929   pava
+42  EqualFrequency  08_extreme_imbalance  True   5   True  1.225022  0.161594    1.009226       
+43      EqualWidth  08_extreme_imbalance  True   5  False  1.150609  0.212522    0.548124       
+44    DecisionTree  08_extreme_imbalance  True   5  False  1.461131  0.000000    4.799843       
+45        ChiMerge  08_extreme_imbalance  True   5  False  1.387947  0.050087  125.835180       
+46          BestKS  08_extreme_imbalance  True   5  False  1.326592  0.092079   24.950981       
+47  SmartMonotonic  08_extreme_imbalance  True   4   True  1.409402  0.035404   12.300253  merge
+48  EqualFrequency             09_random  True   5  False  0.001656  0.752998    1.090050       
+49      EqualWidth             09_random  True   5  False  0.000603  0.910019    0.532866       
+50    DecisionTree             09_random  True   5  False  0.006274  0.064182    5.742073       
+51        ChiMerge             09_random  True   5  False  0.004953  0.261284  134.687901       
+52          BestKS             09_random  True   5  False  0.002952  0.559657   26.992798       
+53  SmartMonotonic             09_random  True   5  False  0.006704  0.000000   15.573978   pava
+54  EqualFrequency      10_step_function  True   5   True  1.260790  0.121123    1.223087       
+55      EqualWidth      10_step_function  True   5   True  1.268896  0.115472    0.574827       
+56    DecisionTree      10_step_function  True   5   True  1.434546  0.000000    4.678965       
+57        ChiMerge      10_step_function  True   5   True  1.417438  0.011926  135.547876       
+58          BestKS      10_step_function  True   5  False  0.945739  0.340740   20.274878       
+59  SmartMonotonic      10_step_function  True   5   True  1.434546  0.000000    9.082079   none
