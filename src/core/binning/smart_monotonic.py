@@ -76,62 +76,46 @@ class SmartMonotonicBinner(BaseBinner):
         # 策略1: 尝试不同箱数，找到满足单调的最大箱数
         best_result = None
         
+        # 首先确定目标趋势
+        _, trend = self._check_monotonic(x_clean, y_clean, 
+                                         [-np.inf, x_clean.median(), np.inf])
+        if monotonic_trend == 'auto':
+            target_trend = trend if trend else 'ascending'
+        else:
+            target_trend = monotonic_trend
+        
         for try_bins in range(max_bins, min_bins - 1, -1):
             splits = self._decision_tree_binning(x_clean, y_clean, try_bins)
             
-            if len(splits) < 3:  # 只有2箱
+            if len(splits) < 3:  # 只有2箱，跳过
                 continue
             
-            is_mono, trend = self._check_monotonic(x_clean, y_clean, splits)
-            iv = self._calculate_iv(x_clean, y_clean, splits)
-            
-            # 确定目标趋势
-            if monotonic_trend == 'auto':
-                target_trend = trend if trend else 'ascending'
-            else:
-                target_trend = monotonic_trend
-            
-            if is_mono:
-                # 已满足单调
-                self._is_monotonic = True
-                self._adjustment_method = 'none'
-                self._original_iv = iv
-                self._final_iv = iv
-                self._splits = splits
-                self._log(f"决策树直接满足{target_trend}，{try_bins}箱，IV={iv:.4f}")
-                return self
-            
-            # 记录最佳尝试
-            if best_result is None or iv > best_result['iv']:
-                best_result = {
-                    'splits': splits,
-                    'iv': iv,
-                    'trend': target_trend,
-                    'bins': try_bins
-                }
-        
-        # 策略2: 如果决策树都不单调，使用强制单调合并
-        if best_result:
-            self._original_iv = best_result['iv']
+            # 立即尝试强制单调合并
             forced_result = self._force_monotonic_merge(
-                x_clean, y_clean, best_result['splits'], 
-                best_result['trend'], min_bins
+                x_clean, y_clean, splits, target_trend, min_bins
             )
             
-            self._splits = forced_result['splits']
-            self._final_iv = forced_result['iv']
-            self._adjustment_method = 'forced_merge'
-            self._is_monotonic = True
+            n_forced_bins = len(forced_result['splits']) - 1
             
-            loss = (self._original_iv - self._final_iv) / self._original_iv if self._original_iv > 0 else 0
-            self._log(f"强制单调合并: {len(self._splits)-1}箱，IV损失={loss:.1%}")
-        else:
-            # 保底：2分箱（中位数切分）
-            self._splits = self._fallback_bins(x_clean)
-            self._final_iv = self._calculate_iv(x_clean, y_clean, self._splits)
-            self._adjustment_method = 'fallback'
-            self._is_monotonic = True
-            self._log("使用保底2分箱")
+            if n_forced_bins >= min_bins:
+                # 强制合并成功，返回结果
+                original_iv = self._calculate_iv(x_clean, y_clean, splits)
+                self._original_iv = original_iv
+                self._final_iv = forced_result['iv']
+                self._adjustment_method = 'forced_merge'
+                self._is_monotonic = True
+                self._splits = forced_result['splits']
+                
+                loss = (original_iv - forced_result['iv']) / original_iv if original_iv > 0 else 0
+                self._log(f"强制单调合并: {n_forced_bins}箱(原{len(splits)-1}箱)，IV损失={loss:.1%}")
+                return self
+        
+        # 保底：2分箱（中位数切分）
+        self._splits = self._fallback_bins(x_clean)
+        self._final_iv = self._calculate_iv(x_clean, y_clean, self._splits)
+        self._adjustment_method = 'fallback'
+        self._is_monotonic = True
+        self._log("使用保底2分箱")
         
         return self
     
@@ -162,8 +146,20 @@ class SmartMonotonicBinner(BaseBinner):
         return 0.0
     
     def _decision_tree_binning(self, x, y, max_bins):
-        """决策树分箱"""
-        min_samples = max(50, int(len(x) * 0.01))
+        """决策树分箱 - 动态调整参数以尽量达到目标箱数"""
+        n_samples = len(x)
+        
+        # 动态计算 min_samples_leaf：确保能分裂出 max_bins 箱
+        # 每箱至少 min_samples_per_bin 样本
+        min_samples_per_bin = 50
+        required_samples = max_bins * min_samples_per_bin
+        
+        if n_samples < required_samples:
+            # 样本不足，降低要求
+            min_samples = max(10, n_samples // (max_bins * 2))
+        else:
+            # 样本充足，但也不要限制太死
+            min_samples = max(30, n_samples // (max_bins * 3))
         
         dt = DecisionTreeClassifier(
             criterion='entropy',

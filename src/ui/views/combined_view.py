@@ -1034,6 +1034,13 @@ class CombinedView(QWidget):
                 kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
             if method_key == 'best_ks':
                 kwargs = {'max_bins': n_bins, 'initial_bins': 64}
+            if method_key == 'smart_monotonic':
+                # 智能单调分箱参数
+                kwargs = {
+                    'max_bins': n_bins,
+                    'min_bins': 2,
+                    'monotonic_trend': 'auto',
+                }
             kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
             kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
         
