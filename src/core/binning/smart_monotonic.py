@@ -31,7 +31,7 @@ class SmartMonotonicBinner(BaseBinner):
     
     参数:
         max_bins (int): 最大箱数，默认10
-        min_bins (int): 最小箱数，默认2
+        min_bins (int): 最小箱数，默认3（避免2分箱业务价值过低）
         trend (str): 单调趋势，'auto'/'ascending'/'descending'，默认'auto'
         adjustment_method (str): 调整方法，'auto'/'merge'/'pava'/'none'，默认'auto'
         iv_tolerance (float): IV损失容忍度，默认0.1（10%）
@@ -55,7 +55,7 @@ class SmartMonotonicBinner(BaseBinner):
     
     # 类常量
     DEFAULT_MAX_BINS = 10
-    DEFAULT_MIN_BINS = 2
+    DEFAULT_MIN_BINS = 3  # 从2改为3，避免2分箱业务价值过低
     DEFAULT_MONOTONIC_TREND = 'auto'
     DEFAULT_ADJUSTMENT_METHOD = 'auto'
     DEFAULT_IV_TOLERANCE = 0.1
@@ -78,7 +78,7 @@ class SmartMonotonicBinner(BaseBinner):
             y: 目标变量（0/1），必需
             **kwargs:
                 max_bins (int): 最大箱数，默认10
-                min_bins (int): 最小箱数，默认2
+                min_bins (int): 最小箱数，默认3（避免2分箱业务价值过低）
                 monotonic_trend (str): 单调趋势，'auto'/'ascending'/'descending'，默认'auto'
                 adjustment_method (str): 调整方法，'auto'/'merge'/'pava'/'none'，默认'auto'
                 iv_tolerance (float): IV损失容忍度（0-1），默认0.1
@@ -716,9 +716,10 @@ class SmartMonotonicBinner(BaseBinner):
             return all(values[i] >= values[i+1] - 1e-10 for i in range(len(values)-1))
     
     def _fallback_bins(self, x: pd.Series) -> List[float]:
-        """保底2分箱"""
-        median = x.median()
-        return [-np.inf, median, np.inf]
+        """保底3分箱 - 33%和67%分位数，避免2分箱业务价值过低"""
+        p33 = x.quantile(0.33)
+        p67 = x.quantile(0.67)
+        return [-np.inf, p33, p67, np.inf]
     
     def _apply_splits(self, x: pd.Series, splits: List[float]) -> pd.Series:
         """应用切分点"""

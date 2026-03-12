@@ -206,7 +206,7 @@ class TestSmartMonotonicBinner(unittest.TestCase):
     def test_default_parameters(self):
         """测试默认参数"""
         self.assertEqual(SmartMonotonicBinner.DEFAULT_MAX_BINS, 10)
-        self.assertEqual(SmartMonotonicBinner.DEFAULT_MIN_BINS, 2)
+        self.assertEqual(SmartMonotonicBinner.DEFAULT_MIN_BINS, 3)  # 改为3，避免2分箱业务价值过低
         self.assertEqual(SmartMonotonicBinner.DEFAULT_MONOTONIC_TREND, 'auto')
 
     # ========== 与其他分箱器对比测试 ==========
