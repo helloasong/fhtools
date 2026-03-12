@@ -421,6 +421,12 @@ class CombinedView(QWidget):
         self.precision_digits_spin.setRange(0, 12)
         self.precision_digits_spin.setValue(0)
         
+        # 智能单调分箱专用配置
+        self.smart_monotonic_trend_combo = QComboBox()
+        for label, key in [("自动", "auto"), ("递增", "ascending"), ("递减", "descending")]:
+            self.smart_monotonic_trend_combo.addItem(label, key)
+        self.smart_monotonic_trend_combo.setVisible(False)  # 默认隐藏
+        
         self.run_btn = QPushButton("运行")
         self.save_btn = QPushButton("确认并保存")
         
@@ -442,6 +448,11 @@ class CombinedView(QWidget):
         trad_layout.addWidget(QLabel("边界精度："))
         trad_layout.addWidget(self.precision_mode_combo)
         trad_layout.addWidget(self.precision_digits_spin)
+        # 智能单调分箱配置（动态显示/隐藏）
+        self.smart_monotonic_trend_label = QLabel("单调趋势：")
+        trad_layout.addWidget(self.smart_monotonic_trend_label)
+        trad_layout.addWidget(self.smart_monotonic_trend_combo)
+        self.smart_monotonic_trend_label.setVisible(False)
         trad_layout.addStretch()  # 添加弹性空间
         
         self.config_stack.addWidget(self.traditional_config)
@@ -597,12 +608,11 @@ class CombinedView(QWidget):
                 kwargs = {'max_bins': n_bins, 'initial_bins': 64}
             if method_key == 'smart_monotonic':
                 # 智能单调分箱参数
+                trend = self.smart_monotonic_trend_combo.currentData()
                 kwargs = {
                     'max_bins': n_bins,
                     'min_bins': 2,
-                    'monotonic_trend': 'auto',  # 自动选择递增或递减
-                    'adjustment_method': 'auto',  # 自动选择调整方式
-                    'iv_tolerance': 0.1,  # 允许10% IV损失
+                    'monotonic_trend': trend,
                 }
             kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
             kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
@@ -986,6 +996,11 @@ class CombinedView(QWidget):
             self.config_stack.setCurrentIndex(0)  # 显示传统配置面板
             # 限制容器高度，防止传统配置面板占用太多空间
             self.config_stack.parentWidget().setMaximumHeight(120)
+        
+        # 控制智能单调分箱配置的显示/隐藏
+        is_smart_monotonic = (method == "smart_monotonic")
+        self.smart_monotonic_trend_combo.setVisible(is_smart_monotonic)
+        self.smart_monotonic_trend_label.setVisible(is_smart_monotonic)
 
     def run_binning(self):
         if not self.current_feature: 
@@ -1036,10 +1051,11 @@ class CombinedView(QWidget):
                 kwargs = {'max_bins': n_bins, 'initial_bins': 64}
             if method_key == 'smart_monotonic':
                 # 智能单调分箱参数
+                trend = self.smart_monotonic_trend_combo.currentData()
                 kwargs = {
                     'max_bins': n_bins,
                     'min_bins': 2,
-                    'monotonic_trend': 'auto',
+                    'monotonic_trend': trend,
                 }
             kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
             kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
