@@ -10,6 +10,7 @@ from .supervised import DecisionTreeBinner, ChiMergeBinner, BestKSBinner
 from .optbinning_adapter import (
     OptimalBinningAdapter,
     OPTBINNING_AVAILABLE,
+    InfeasibleBinningError,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     # 可选依赖
     'OptimalBinningAdapter',
     'OPTBINNING_AVAILABLE',
+    'InfeasibleBinningError',
 ]

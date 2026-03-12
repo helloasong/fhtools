@@ -12,6 +12,15 @@ from .base import BaseBinner
 
 logger = logging.getLogger(__name__)
 
+
+class InfeasibleBinningError(RuntimeError):
+    """最优分箱约束冲突导致无可行解的错误。
+    
+    当 optbinning 求解器返回 INFEASIBLE 状态时抛出，
+    提示用户调整约束条件。
+    """
+    pass
+
 # 可选依赖处理
 try:
     from optbinning import OptimalBinning
@@ -244,8 +253,16 @@ class OptimalBinningAdapter(BaseBinner):
         logger.info(
             f"Fitting OptimalBinning with solver={params['solver']}, "
             f"divergence={params['divergence']}, max_n_bins={params['max_n_bins']}, "
-            f"dtype={dtype}"
+            f"monotonic_trend={params['monotonic_trend']}, dtype={dtype}"
         )
+        
+        # 对 peak/valley 约束给出警告提示
+        if params['monotonic_trend'] in ['peak', 'valley', 'peak_heuristic', 'valley_heuristic']:
+            if params['max_n_prebins'] < 20:
+                logger.warning(
+                    f"monotonic_trend='{params['monotonic_trend']}' may require max_n_prebins >= 20 "
+                    f"to form effective change points, current={params['max_n_prebins']}"
+                )
         
         try:
             # 构建 OptimalBinning 参数
@@ -299,6 +316,28 @@ class OptimalBinningAdapter(BaseBinner):
             self._is_fitted = True
             self._status = getattr(self._optb, 'status', 'UNKNOWN')
             
+            # 检查求解状态
+            if self._status == 'INFEASIBLE' or 'No solution exists' in str(getattr(self._optb, '_status', '')):
+                self._is_fitted = False
+                self._status = 'INFEASIBLE'
+                raise InfeasibleBinningError(
+                    "当前约束条件下无可行解。请尝试以下调整：\n"
+                    "1. 将『单调性』改为『自动』或关闭\n"
+                    "2. 增加『预分箱数』（如 50-100）\n" 
+                    "3. 更换求解器（MIP → CP）\n"
+                    "4. 放宽『最小占比』约束\n"
+                    "5. 使用无监督分箱方法（如等频、等宽）"
+                )
+            
+            # 检查是否只有单箱（退化解）
+            if self._status in ['OPTIMAL', 'FEASIBLE']:
+                try:
+                    n_bins = len(self._optb.splits) - 1 if self._optb.splits else 0
+                    if n_bins <= 1:
+                        logger.warning(f"OptimalBinning returned only {n_bins} bin(s), possibly due to strict constraints")
+                except Exception:
+                    pass
+            
             # 提取切点或类别
             self._update_splits()
             
@@ -307,10 +346,27 @@ class OptimalBinningAdapter(BaseBinner):
             
             logger.info(f"OptimalBinning fitting completed with status: {self._status}")
             
+            # 检查 peak/valley 约束是否生效
+            if params['monotonic_trend'] in ['peak', 'valley', 'peak_heuristic', 'valley_heuristic']:
+                self._check_monotonic_trend_applied(params['monotonic_trend'])
+            
+        except InfeasibleBinningError:
+            raise
         except Exception as e:
             logger.error(f"OptimalBinning fitting failed: {str(e)}")
             self._status = 'ERROR'
             self._is_fitted = False
+            # 检查是否是 INFEASIBLE 相关错误
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ['infeasible', 'no solution', 'mpsolver']):
+                raise InfeasibleBinningError(
+                    "当前约束条件下无可行解。请尝试以下调整：\n"
+                    "1. 将『单调性』改为『自动』或关闭\n"
+                    "2. 增加『预分箱数』（如 50-100）\n" 
+                    "3. 更换求解器（MIP → CP）\n"
+                    "4. 放宽『最小占比』约束\n"
+                    "5. 使用无监督分箱方法（如等频、等宽）"
+                ) from e
             raise RuntimeError(f"OptimalBinning fitting failed: {str(e)}") from e
         
         return self
@@ -383,6 +439,69 @@ class OptimalBinningAdapter(BaseBinner):
                     self._info['quality_score'] = float(self._optb.quality_score)
             except Exception:
                 pass
+    
+    def _check_monotonic_trend_applied(self, expected_trend: str) -> None:
+        """检查单调性约束是否实际生效。
+        
+        对于 peak/valley 约束，如果数据本身的分布无法满足约束，
+        求解器可能会退化为单调递增/递减。此方法检测这种情况并给出警告。
+        
+        Args:
+            expected_trend: 期望的单调性趋势 ('peak', 'valley', 'peak_heuristic', 'valley_heuristic')
+        """
+        if self._optb is None or not hasattr(self._optb, 'binning_table'):
+            return
+        
+        try:
+            # 获取各箱的坏样本率
+            bt = self._optb.binning_table
+            event_rates = list(bt.event_rate)
+            
+            if len(event_rates) < 3:
+                logger.warning(
+                    f"monotonic_trend='{expected_trend}' requires at least 3 bins, "
+                    f"but got {len(event_rates)}. Constraint may not be effective."
+                )
+                return
+            
+            # 检测实际趋势
+            increasing = decreasing = 0
+            for i in range(len(event_rates) - 1):
+                if event_rates[i+1] > event_rates[i]:
+                    increasing += 1
+                elif event_rates[i+1] < event_rates[i]:
+                    decreasing += 1
+            
+            # 判断实际趋势
+            actual_trend = None
+            if increasing > 0 and decreasing == 0:
+                actual_trend = 'ascending'
+            elif decreasing > 0 and increasing == 0:
+                actual_trend = 'descending'
+            elif increasing > 0 and decreasing > 0:
+                # 检查是否是 peak 或 valley
+                max_idx = event_rates.index(max(event_rates))
+                min_idx = event_rates.index(min(event_rates))
+                if max_idx not in [0, len(event_rates)-1]:
+                    actual_trend = 'peak'
+                elif min_idx not in [0, len(event_rates)-1]:
+                    actual_trend = 'valley'
+            
+            # 检查是否符合预期
+            expected_base = expected_trend.replace('_heuristic', '')
+            if actual_trend and actual_trend != expected_base:
+                logger.warning(
+                    f"monotonic_trend='{expected_trend}' requested but actual trend is '{actual_trend}'. "
+                    f"The constraint could not be satisfied with current data distribution. "
+                    f"Consider increasing max_n_prebins or using '{expected_trend}_heuristic'."
+                )
+                # 将警告信息保存到 _info 中供 UI 显示
+                self._info['trend_warning'] = (
+                    f"期望趋势 '{expected_trend}' 未生效，实际趋势为 '{actual_trend}'。"
+                    f"建议：增加预分箱数或改用 '{expected_trend}_heuristic'"
+                )
+        except Exception as e:
+            logger.debug(f"Could not check monotonic trend: {e}")
     
     def transform(self, x: pd.Series) -> pd.Series:
         """将原始数据映射到对应的箱。

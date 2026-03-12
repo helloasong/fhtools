@@ -180,6 +180,29 @@ class BatchBinningDialog(QDialog):
         self.cancel_btn.clicked.connect(self.accept)
 
 
+class SingleBinningWorker(QThread):
+    """单变量分箱工作线程"""
+    
+    finished = pyqtSignal(str, object, bool, str)  # 变量名, 指标, 是否成功, 错误信息
+    
+    def __init__(self, controller: ProjectController, feature: str, method: str, **kwargs):
+        super().__init__()
+        self.controller = controller
+        self.feature = feature
+        self.method = method
+        self.kwargs = kwargs
+    
+    def run(self):
+        """执行单变量分箱"""
+        try:
+            # 设置 emit_error=False 避免重复弹窗（错误会通过 finished 信号传递）
+            self.controller.run_binning(self.feature, method=self.method, emit_error=False, **self.kwargs)
+            metrics = self.controller.state.binning_results.get(self.feature)
+            self.finished.emit(self.feature, metrics, True, "")
+        except Exception as e:
+            self.finished.emit(self.feature, None, False, str(e))
+
+
 class BatchBinningWorker(QThread):
     """批量分箱工作线程"""
     
@@ -211,7 +234,8 @@ class BatchBinningWorker(QThread):
             self.progress.emit(i + 1, len(self.features), feature)
             
             try:
-                self.controller.run_binning(feature, method=self.method, **self.kwargs)
+                # 设置 emit_error=False 避免重复弹窗（错误会通过 item_finished 信号传递）
+                self.controller.run_binning(feature, method=self.method, emit_error=False, **self.kwargs)
                 metrics = self.controller.state.binning_results.get(feature)
                 success_list.append(feature)
                 self.item_finished.emit(feature, metrics, True, "")
@@ -234,6 +258,7 @@ class CombinedView(QWidget):
         self._skip_autorange_once = False
         self.batch_dialog = None
         self.batch_worker = None
+        self._binning_worker = None  # 单变量分箱工作线程
         self.init_ui()
         self.setup_connections()
 
@@ -313,12 +338,44 @@ class CombinedView(QWidget):
         self.recommend_label = QLabel("")
         self.recommend_label.setStyleSheet("color:#888;font-size:12px;")
 
-        # 中部：分布图
+        # 中部：分布图（带双轴：左轴样本数，右轴坏样本率）
         self.dist_plot = pg.PlotWidget(title="分布图")
         self.dist_plot.setMinimumHeight(150)
         self.dist_plot.setMaximumHeight(250)
         self._compact_plot(self.dist_plot, height=180)
         self._setup_bottom_anchor(self.dist_plot)
+        
+        # 创建右侧Y轴用于显示坏样本率
+        self.dist_plot_right_axis = pg.ViewBox()
+        self.dist_plot.plotItem.scene().addItem(self.dist_plot_right_axis)
+        self.dist_plot.plotItem.getAxis('right').linkToView(self.dist_plot_right_axis)
+        self.dist_plot.plotItem.getAxis('right').setLabel('坏样本率', color='red')
+        self.dist_plot.plotItem.getAxis('right').setPen('red')
+        self.dist_plot.plotItem.showAxis('right')
+        
+        # 禁用右侧ViewBox的鼠标交互，让它完全跟随主ViewBox
+        self.dist_plot_right_axis.setMouseEnabled(x=False, y=False)
+        self.dist_plot_right_axis.enableAutoRange(axis='x', enable=False)
+        self.dist_plot_right_axis.enableAutoRange(axis='y', enable=True)
+        
+        # 同步左右两个ViewBox的X轴范围
+        def update_right_axis_range():
+            xmin, xmax = self.dist_plot.plotItem.vb.viewRange()[0]
+            self.dist_plot_right_axis.setXRange(xmin, xmax, padding=0)
+        
+        # 同步主ViewBox的几何变化到右侧ViewBox
+        def update_right_axis_geometry():
+            # 确保右侧ViewBox的几何位置与主ViewBox一致
+            self.dist_plot_right_axis.setGeometry(self.dist_plot.plotItem.vb.sceneBoundingRect())
+        
+        # 同步Y轴自动缩放
+        def update_right_y_range():
+            # 当主ViewBox的Y轴变化时，保持右侧ViewBox的Y轴自动调整
+            pass  # 右侧Y轴有自己的数据范围
+        
+        self.dist_plot.plotItem.vb.sigXRangeChanged.connect(update_right_axis_range)
+        self.dist_plot.plotItem.vb.sigResized.connect(update_right_axis_geometry)
+        
         self.dist_card = self._wrap_card(self.dist_plot)
 
         # 中部：分箱图
@@ -651,6 +708,7 @@ class CombinedView(QWidget):
     def setup_connections(self):
         self.controller.project_updated.connect(self.on_project_updated)
         self.controller.binning_finished.connect(self.on_binning_finished)
+        self.controller.error_occurred.connect(self.on_error)
 
     def on_project_updated(self, state: ProjectState):
         self.feature_list.clear()
@@ -659,6 +717,18 @@ class CombinedView(QWidget):
         # 更新样本数
         if OPTBINNING_AVAILABLE and self.optbinning_config is not None:
             self.optbinning_config.set_n_samples(self.controller.get_sample_count())
+
+    def on_error(self, msg: str):
+        """处理分箱错误，显示友好的提示"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # 检查是否是无解错误
+        if "【分箱无解】" in msg:
+            # 使用信息框而不是错误框，因为这不是程序错误
+            QMessageBox.information(self, "分箱无解 - 建议调整参数", msg)
+        else:
+            # 其他错误使用错误框
+            QMessageBox.critical(self, "错误", msg)
 
     def on_feature_selected(self, item):
         self.current_feature = item.text()
@@ -790,17 +860,63 @@ class CombinedView(QWidget):
         self.recommend_label.setText(f"分箱建议：{method_to_cn(rec)}")
         # 分布图
         self.dist_plot.clear()
+        # 清理右侧Y轴的内容
+        for item in list(self.dist_plot_right_axis.addedItems):
+            self.dist_plot_right_axis.removeItem(item)
+        
         series = self.controller.df[self.current_feature].dropna()
+        target = None
+        if self.controller.state and self.controller.state.target_col:
+            target = self.controller.df[self.controller.state.target_col]
+        
         if pd.api.types.is_numeric_dtype(series):
             y, x = np.histogram(series, bins=20)
             width = x[1] - x[0]
             x_centers = x[:-1] + width/2
             bar = pg.BarGraphItem(x=x_centers, height=y, width=width*0.9, brush=pg.mkBrush(120, 160, 220, 160))
             self.dist_plot.addItem(bar)
+            
+            # 如果有目标变量，计算每个区间的坏样本率并绘制
+            if target is not None:
+                bad_rates = []
+                valid_centers = []
+                for i in range(len(x) - 1):
+                    left, right = x[i], x[i + 1]
+                    # 找到当前区间的样本
+                    mask = (series >= left) & (series < right)
+                    if i == len(x) - 2:  # 最后一个区间包含右边界
+                        mask = (series >= left) & (series <= right)
+                    
+                    bin_samples = mask.sum()
+                    if bin_samples > 0:
+                        # 获取对应的目标值
+                        bin_target = target[series.index[mask]]
+                        bad_rate = bin_target.mean() if bin_target.count() > 0 else 0
+                        bad_rates.append(bad_rate)
+                        valid_centers.append(x_centers[i])
+                
+                if bad_rates:
+                    # 在右侧Y轴绘制坏样本率曲线
+                    curve = pg.PlotCurveItem(
+                        x=valid_centers, 
+                        y=bad_rates, 
+                        pen=pg.mkPen('red', width=2),
+                        symbol='o',
+                        symbolSize=4,
+                        symbolBrush='red'
+                    )
+                    self.dist_plot_right_axis.addItem(curve)
+                    # 设置Y轴范围并启用自动调整
+                    self.dist_plot_right_axis.setYRange(0, max(bad_rates) * 1.2 if max(bad_rates) > 0 else 1)
+                    self.dist_plot_right_axis.enableAutoRange(axis='y', enable=True)
+            
             try:
                 xmin, xmax = float(x.min()), float(x.max())
                 ymax = float(y.max()) if y.size else 1.0
                 self.dist_plot.getPlotItem().setRange(xRange=(xmin, xmax), yRange=(0, ymax * 1.05), padding=0.0)
+                self.dist_plot_right_axis.setXRange(xmin, xmax, padding=0)
+                # 强制同步几何位置
+                self.dist_plot_right_axis.setGeometry(self.dist_plot.plotItem.vb.sceneBoundingRect())
             except Exception:
                 pass
         else:
@@ -808,10 +924,40 @@ class CombinedView(QWidget):
             x = np.arange(len(counts))
             bar = pg.BarGraphItem(x=x, height=counts.values, width=0.6, brush=pg.mkBrush(160, 200, 120, 160))
             self.dist_plot.addItem(bar)
+            
+            # 如果有目标变量，计算每个类别的坏样本率
+            if target is not None:
+                bad_rates = []
+                valid_x = []
+                for i, category in enumerate(counts.index):
+                    mask = series == category
+                    bin_samples = mask.sum()
+                    if bin_samples > 0:
+                        bin_target = target[series.index[mask]]
+                        bad_rate = bin_target.mean() if bin_target.count() > 0 else 0
+                        bad_rates.append(bad_rate)
+                        valid_x.append(i)
+                
+                if bad_rates:
+                    curve = pg.PlotCurveItem(
+                        x=valid_x, 
+                        y=bad_rates, 
+                        pen=pg.mkPen('red', width=2),
+                        symbol='o',
+                        symbolSize=4,
+                        symbolBrush='red'
+                    )
+                    self.dist_plot_right_axis.addItem(curve)
+                    self.dist_plot_right_axis.setYRange(0, max(bad_rates) * 1.2 if max(bad_rates) > 0 else 1)
+                    self.dist_plot_right_axis.enableAutoRange(axis='y', enable=True)
+            
             try:
                 n = len(counts)
                 ymax = float(counts.values.max()) if n else 1.0
                 self.dist_plot.getPlotItem().setRange(xRange=(-0.5, n - 0.5), yRange=(0, ymax * 1.05), padding=0.0)
+                self.dist_plot_right_axis.setXRange(-0.5, n - 0.5, padding=0)
+                # 强制同步几何位置
+                self.dist_plot_right_axis.setGeometry(self.dist_plot.plotItem.vb.sceneBoundingRect())
             except Exception:
                 pass
 
@@ -844,54 +990,92 @@ class CombinedView(QWidget):
             QMessageBox.warning(self, "提示", "未设置目标变量，当前建议为监督分箱，请先设置目标变量")
             return
         
+        # 如果已有正在运行的任务，先停止
+        if self._binning_worker is not None and self._binning_worker.isRunning():
+            QMessageBox.information(self, "提示", "正在处理中，请稍候...")
+            return
+        
+        # 准备参数
+        kwargs = {}
+        if method_key == 'optimal':
+            # 获取 Optbinning 配置
+            kwargs = self.optbinning_config.get_config()
+            
+            # 类型验证：检查类型选择是否适合数据
+            if self.optbinning_config is not None and self.current_feature:
+                import pandas as pd
+                feature_data = self.controller.df[self.current_feature]
+                valid, warning_msg = self.optbinning_config.validate_dtype_for_data(feature_data)
+                if not valid:
+                    reply = QMessageBox.question(
+                        self, "类型不匹配警告",
+                        warning_msg + "\n\n是否继续运行？",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.No:
+                        return
+        else:
+            # 传统配置
+            n_bins = self.n_bins_spin.value()
+            kwargs = {'n_bins': n_bins}
+            if method_key in ['decision_tree', 'chi_merge']:
+                kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
+            if method_key == 'best_ks':
+                kwargs = {'max_bins': n_bins, 'initial_bins': 64}
+            kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
+            kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
+        
         # 运行按钮 loading 状态
         self.run_btn.setEnabled(False)
-        original_text = self.run_btn.text()
+        self._run_btn_original_text = self.run_btn.text()
         self.run_btn.setText("运行中...")
         
-        try:
-            if method_key == 'optimal':
-                # 获取 Optbinning 配置
-                kwargs = self.optbinning_config.get_config()
-                
-                # 类型验证：检查类型选择是否适合数据
-                if self.optbinning_config is not None and self.current_feature:
-                    import pandas as pd
-                    feature_data = self.controller.df[self.current_feature]
-                    valid, warning_msg = self.optbinning_config.validate_dtype_for_data(feature_data)
-                    if not valid:
-                        reply = QMessageBox.question(
-                            self, "类型不匹配警告",
-                            warning_msg + "\n\n是否继续运行？",
-                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                            QMessageBox.StandardButton.No
-                        )
-                        if reply == QMessageBox.StandardButton.No:
-                            return
-            else:
-                # 传统配置
-                n_bins = self.n_bins_spin.value()
-                kwargs = {'n_bins': n_bins}
-                if method_key in ['decision_tree', 'chi_merge']:
-                    kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
-                if method_key == 'best_ks':
-                    kwargs = {'max_bins': n_bins, 'initial_bins': 64}
-                kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
-                kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
-            
-            # 调用控制器执行分箱
-            self.controller.run_binning(self.current_feature, method=method, **kwargs)
+        # 设置全局等待光标（提示用户正在处理）
+        from PyQt6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         
-        finally:
-            # 恢复按钮状态（无论成功与否都恢复）
-            self.run_btn.setEnabled(True)
-            self.run_btn.setText(original_text)
+        # 创建并启动工作线程
+        self._binning_worker = SingleBinningWorker(
+            self.controller, self.current_feature, method, **kwargs
+        )
+        self._binning_worker.finished.connect(self._on_single_binning_finished)
+        self._binning_worker.start()
+    
+    def _on_single_binning_finished(self, feature: str, metrics, success: bool, error_msg: str):
+        """单变量分箱完成的回调"""
+        # 恢复光标
+        from PyQt6.QtWidgets import QApplication
+        QApplication.restoreOverrideCursor()
+        
+        # 恢复按钮状态
+        self.run_btn.setEnabled(True)
+        if hasattr(self, '_run_btn_original_text'):
+            self.run_btn.setText(self._run_btn_original_text)
+        
+        # 清理工作线程
+        self._binning_worker = None
+        
+        if not success:
+            # 显示错误信息
+            from PyQt6.QtWidgets import QMessageBox
+            if "【分箱无解】" in error_msg:
+                QMessageBox.information(self, "分箱无解 - 建议调整参数", error_msg)
+            else:
+                QMessageBox.critical(self, "错误", f"分箱失败: {error_msg}")
+            return
+        
+        # 分箱成功，更新显示
+        # 注意：controller 已经发送了 binning_finished 信号，on_binning_finished 会被调用
 
     def on_binning_finished(self, feature: str, metrics: BinningMetrics):
         if feature != self.current_feature: return
         cfg = self.controller.state.binning_configs[feature]
         self._apply_display_config(cfg)
         self.render_binning(metrics, cfg)
+        
+        # 检查是否有趋势警告（peak/valley 约束未生效）
+        self._check_and_show_trend_warning(cfg)
 
     def render_binning(self, metrics: BinningMetrics, cfg: BinningConfig):
         precision = resolve_precision_step(cfg.params)
@@ -912,12 +1096,34 @@ class CombinedView(QWidget):
         for _, row in df.iterrows():
             b = row['bin']
             if isinstance(b, pd.Interval):
-                centers.append((b.left + b.right) / 2)
+                # 处理可能的 inf 值
+                left = b.left if np.isfinite(b.left) else np.nan
+                right = b.right if np.isfinite(b.right) else np.nan
+                if np.isfinite(left) and np.isfinite(right):
+                    centers.append((left + right) / 2)
+                elif np.isfinite(left):
+                    centers.append(left)
+                elif np.isfinite(right):
+                    centers.append(right)
+                else:
+                    centers.append(np.nan)
             else:
                 try:
-                    txt = str(b).replace('(', '').replace(']', '')
+                    txt = str(b).replace('(', '').replace(']', '').replace('[', '').replace(')', '')
                     parts = txt.split(',')
-                    centers.append((float(parts[0]) + float(parts[1])) / 2)
+                    left = float(parts[0])
+                    right = float(parts[1]) if len(parts) > 1 else left
+                    # 处理 inf 值
+                    left = left if np.isfinite(left) else np.nan
+                    right = right if np.isfinite(right) else np.nan
+                    if np.isfinite(left) and np.isfinite(right):
+                        centers.append((left + right) / 2)
+                    elif np.isfinite(left):
+                        centers.append(left)
+                    elif np.isfinite(right):
+                        centers.append(right)
+                    else:
+                        centers.append(np.nan)
                 except Exception:
                     centers.append(np.nan)
             bad_rates.append(row['bad_rate'])
@@ -1014,6 +1220,75 @@ class CombinedView(QWidget):
             self.bin_table.parentWidget().adjustSize()
         except Exception:
             pass
+
+    def _check_and_show_trend_warning(self, cfg: BinningConfig) -> None:
+        """检查并显示单调性趋势约束的警告信息。
+        
+        当用户选择 peak/valley 但约束未生效时，显示提示信息。
+        """
+        if not cfg or not cfg.params:
+            return
+        
+        trend = cfg.params.get('monotonic_trend', 'auto')
+        if trend not in ['peak', 'valley', 'peak_heuristic', 'valley_heuristic']:
+            return
+        
+        # 从分箱结果中检查实际趋势
+        if not self.controller.state.binning_results.get(self.current_feature):
+            return
+        
+        metrics = self.controller.state.binning_results[self.current_feature]
+        if metrics.summary_table is None or len(metrics.summary_table) < 3:
+            return
+        
+        # 获取坏样本率
+        bad_rates = metrics.summary_table['bad_rate'].tolist()
+        if not bad_rates:
+            return
+        
+        # 检测实际趋势
+        increasing = decreasing = 0
+        for i in range(len(bad_rates) - 1):
+            if bad_rates[i+1] > bad_rates[i]:
+                increasing += 1
+            elif bad_rates[i+1] < bad_rates[i]:
+                decreasing += 1
+        
+        # 判断实际趋势
+        actual_trend = None
+        if increasing > 0 and decreasing == 0:
+            actual_trend = 'ascending'
+        elif decreasing > 0 and increasing == 0:
+            actual_trend = 'descending'
+        elif increasing > 0 and decreasing > 0:
+            max_idx = bad_rates.index(max(bad_rates))
+            min_idx = bad_rates.index(min(bad_rates))
+            if max_idx not in [0, len(bad_rates)-1]:
+                actual_trend = 'peak'
+            elif min_idx not in [0, len(bad_rates)-1]:
+                actual_trend = 'valley'
+        
+        # 检查是否符合预期
+        expected_base = trend.replace('_heuristic', '')
+        if actual_trend and actual_trend != expected_base:
+            # 在标题栏显示警告
+            trend_names = {'peak': '单峰', 'valley': '单谷', 'ascending': '递增', 'descending': '递减'}
+            expected_cn = trend_names.get(expected_base, expected_base)
+            actual_cn = trend_names.get(actual_trend, actual_trend)
+            
+            QMessageBox.information(
+                self,
+                f"{expected_cn}约束未生效",
+                f"期望的『{expected_cn}』趋势未生效，实际分箱结果为『{actual_cn}』趋势。\n\n"
+                f"可能原因：\n"
+                f"1. 数据本身的分布特性决定了最优解是{actual_cn}的\n"
+                f"2. 预分箱数不足，无法形成有效的转折点\n"
+                f"3. 其他约束条件（如最小占比）限制了形状\n\n"
+                f"建议尝试：\n"
+                f"• 增加『预分箱数』到 50-100\n"
+                f"• 使用『{expected_base}_heuristic』求解方式\n"
+                f"• 暂时接受当前结果，或改用其他分箱方法"
+            )
 
     def _update_trend_indicator(self, cfg: BinningConfig):
         """更新单调性趋势指示器"""
@@ -1210,6 +1485,9 @@ class CombinedView(QWidget):
         centers = np.array(self._current_centers)
         bad_rates = np.array(self._current_bad_rates)
         if centers.size == 0: return
+        # 检查是否所有 centers 都是 NaN
+        if np.all(np.isnan(centers)):
+            return
         idx = int(np.nanargmin(np.abs(centers - x_val)))
         row = self._current_metrics_df.iloc[idx]
         cfg = self.controller.state.binning_configs.get(self.current_feature)

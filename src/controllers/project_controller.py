@@ -8,7 +8,7 @@ from src.data.repository import ProjectRepository
 from src.core.binning.unsupervised import EqualFrequencyBinner, EqualWidthBinner, ManualBinner
 from src.core.binning.supervised import DecisionTreeBinner, ChiMergeBinner
 from src.core.binning.supervised import BestKSBinner
-from src.core.binning.optbinning_adapter import OptimalBinningAdapter, OPTBINNING_AVAILABLE
+from src.core.binning.optbinning_adapter import OptimalBinningAdapter, OPTBINNING_AVAILABLE, InfeasibleBinningError
 from src.core.metrics import MetricsCalculator, BinningMetrics
 from src.services.export_service import export_excel, export_python
 from src.utils.formatting import snap_value_to_precision
@@ -183,17 +183,19 @@ class ProjectController(QObject):
             )
             self.state.variable_stats[col] = stats
 
-    def run_binning(self, feature: str, method: str = 'equal_freq', **kwargs):
+    def run_binning(self, feature: str, method: str = 'equal_freq', emit_error: bool = True, **kwargs):
         """
         对指定特征执行分箱计算。
         
         Args:
             feature: 特征列名
             method: 分箱方法
+            emit_error: 是否在发生错误时发射 error_occurred 信号（工作线程中应设为 False 避免重复弹窗）
             **kwargs: 算法参数 (n_bins, splits 等)
         """
         if self.df is None or self.state.target_col is None:
-            self.error_occurred.emit("Data or Target not set.")
+            if emit_error:
+                self.error_occurred.emit("Data or Target not set.")
             return
 
         try:
@@ -283,8 +285,29 @@ class ProjectController(QObject):
             # 6. 通知 UI
             self.binning_finished.emit(feature, metrics)
             
+        except InfeasibleBinningError as e:
+            # 最优分箱约束冲突，提供友好的错误提示
+            if emit_error:
+                self.error_occurred.emit(f"【分箱无解】{feature}\n\n{str(e)}")
+            raise  # 重新抛出，让调用者处理
         except Exception as e:
-            self.error_occurred.emit(f"Binning failed for {feature}: {str(e)}")
+            error_msg = str(e)
+            # 检查是否是无解相关的错误
+            if any(keyword in error_msg.lower() for keyword in ['infeasible', 'no solution', 'mpsolver']):
+                if emit_error:
+                    self.error_occurred.emit(
+                        f"【分箱无解】{feature}\n\n"
+                        f"当前约束条件下无可行解。请尝试以下调整：\n"
+                        f"1. 将『单调性』改为『自动』或关闭\n"
+                        f"2. 增加『预分箱数』（如 50-100）\n" 
+                        f"3. 更换求解器（MIP → CP）\n"
+                        f"4. 放宽『最小占比』约束\n"
+                        f"5. 使用无监督分箱方法（如等频、等宽）"
+                    )
+            else:
+                if emit_error:
+                    self.error_occurred.emit(f"Binning failed for {feature}: {error_msg}")
+            raise  # 重新抛出，让调用者处理
 
     def update_splits(self, feature: str, new_splits: List[float]):
         """用户手动调整切点后，重新计算指标"""
