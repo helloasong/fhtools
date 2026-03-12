@@ -17,6 +17,7 @@ from src.data.models import ProjectState, VariableStats, BinningMetrics, Binning
 from src.services.recommendation_service import recommend_method, method_to_cn
 from src.utils.formatting import format_bin_label, parse_precision_step, resolve_precision_step
 from src.ui.widgets.optbinning_config_panel_compact import OptbinningConfigPanel
+from src.ui.widgets.smart_monotonic_config_panel import SmartMonotonicConfigPanel
 from src.core.binning import OPTBINNING_AVAILABLE
 
 # 单调性趋势图标映射
@@ -340,7 +341,7 @@ class CombinedView(QWidget):
         self.recommend_label.setStyleSheet("color:#888;font-size:12px;")
 
         # 中部：分布图（带双轴：左轴样本数，右轴坏样本率）
-        self.dist_plot = pg.PlotWidget(title="分布图")
+        self.dist_plot = pg.PlotWidget(title="分布图 (数据单调性: -)")
         self.dist_plot.setMinimumHeight(150)
         self.dist_plot.setMaximumHeight(250)
         self._compact_plot(self.dist_plot, height=180)
@@ -421,51 +422,49 @@ class CombinedView(QWidget):
         self.precision_digits_spin.setRange(0, 12)
         self.precision_digits_spin.setValue(0)
         
-        # 智能单调分箱专用配置
-        self.smart_monotonic_trend_combo = QComboBox()
-        for label, key in [("自动", "auto"), ("递增", "ascending"), ("递减", "descending")]:
-            self.smart_monotonic_trend_combo.addItem(label, key)
-        self.smart_monotonic_trend_combo.setVisible(False)  # 默认隐藏
-        
         self.run_btn = QPushButton("运行")
         self.save_btn = QPushButton("确认并保存")
         
-        # 配置面板区域（使用 QStackedWidget 切换）
+        # ========== 通用配置行（始终可见）==========
+        self.common_config_widget = QWidget()
+        common_layout = QHBoxLayout(self.common_config_widget)
+        common_layout.setContentsMargins(8, 4, 8, 4)
+        common_layout.setSpacing(12)
+        
+        # 箱数
+        common_layout.addWidget(QLabel("箱数:"))
+        common_layout.addWidget(self.n_bins_spin)
+        
+        # 缺失值策略
+        common_layout.addWidget(QLabel("缺失值:"))
+        common_layout.addWidget(self.missing_combo)
+        
+        # 边界精度
+        common_layout.addWidget(QLabel("边界精度:"))
+        common_layout.addWidget(self.precision_mode_combo)
+        common_layout.addWidget(self.precision_digits_spin)
+        common_layout.addStretch()
+        
+        # ========== 方法特有配置（堆栈切换）==========
         self.config_stack = QStackedWidget()
         
-        # 传统配置面板（将原有控件移入）
-        self.traditional_config = QWidget()
-        self.traditional_config.setMaximumHeight(80)  # 限制最大高度
-        trad_layout = QHBoxLayout(self.traditional_config)
-        trad_layout.setContentsMargins(8, 8, 8, 8)
-        trad_layout.setSpacing(12)
+        # 1. 空面板（用于不需要特殊配置的方法）
+        self.empty_config = QWidget()
+        self.config_stack.addWidget(self.empty_config)
         
-        # 将原有配置控件移到传统面板
-        trad_layout.addWidget(QLabel("箱数："))
-        trad_layout.addWidget(self.n_bins_spin)
-        trad_layout.addWidget(QLabel("缺失值策略："))
-        trad_layout.addWidget(self.missing_combo)
-        trad_layout.addWidget(QLabel("边界精度："))
-        trad_layout.addWidget(self.precision_mode_combo)
-        trad_layout.addWidget(self.precision_digits_spin)
-        # 智能单调分箱配置（动态显示/隐藏）
-        self.smart_monotonic_trend_label = QLabel("单调趋势：")
-        trad_layout.addWidget(self.smart_monotonic_trend_label)
-        trad_layout.addWidget(self.smart_monotonic_trend_combo)
-        self.smart_monotonic_trend_label.setVisible(False)
-        trad_layout.addStretch()  # 添加弹性空间
+        # 2. 智能分箱配置面板
+        self.smart_monotonic_config = SmartMonotonicConfigPanel()
+        self.config_stack.addWidget(self.smart_monotonic_config)
         
-        self.config_stack.addWidget(self.traditional_config)
-        
-        # Optbinning 配置面板（仅当 optbinning 可用时创建）
+        # 3. Optbinning 配置面板（仅当 optbinning 可用时创建）
         self.optbinning_config = None
         if OPTBINNING_AVAILABLE:
             self.optbinning_config = OptbinningConfigPanel()
             self.optbinning_config.set_n_samples(self.controller.get_sample_count())
             self.config_stack.addWidget(self.optbinning_config)
-            self.config_stack.setCurrentIndex(1)  # 显示 Optbinning
-        else:
-            self.config_stack.setCurrentIndex(0)  # 显示传统
+        
+        # 默认显示智能分箱
+        self.config_stack.setCurrentIndex(1)
         
         # 构建工具栏（第一行：分箱方法 + 运行按钮）
         toolbar_line1 = QHBoxLayout()
@@ -474,21 +473,24 @@ class CombinedView(QWidget):
         # 分箱方法下拉框
         self.method_combo = QComboBox()
         
-        # 构建方法列表，将最优分箱置顶
-        method_map = []
-        if OPTBINNING_AVAILABLE:
-            method_map.append(("🎯 最优分箱 (推荐)", "optimal"))
-            method_map.append(("───────────────", "separator"))
-        
-        method_map.extend([
-            ("智能单调分箱", "smart_monotonic"),  # 新增：自动追求单调，100%有解
+        # 构建方法列表，将智能单调分箱置顶作为默认
+        method_map = [
+            ("🤖 智能分箱 (推荐)", "smart_monotonic"),  # 默认：自动追求单调，100%有解
+            ("───────────────", "separator"),
             ("等频分箱", "equal_freq"),
             ("等距分箱", "equal_width"),
             ("决策树分箱", "decision_tree"),
             ("卡方分箱", "chi_merge"),
             ("Best-KS 分箱", "best_ks"),
-            ("自定义切点", "manual"),
-        ])
+        ]
+        
+        # 如果optbinning可用，添加为可选方法
+        if OPTBINNING_AVAILABLE:
+            method_map.append(("───────────────", "separator"))
+            method_map.append(("🎯 最优分箱 (OptBinning)", "optimal"))
+        
+        # 最后添加自定义切点
+        method_map.append(("自定义切点", "manual"))
         
         for label, key in method_map:
             if key == "separator":
@@ -498,8 +500,8 @@ class CombinedView(QWidget):
             else:
                 self.method_combo.addItem(label, key)
         
-        if OPTBINNING_AVAILABLE:
-            self.method_combo.setCurrentIndex(0)
+        # 默认选中智能分箱（第一个有效选项）
+        self.method_combo.setCurrentIndex(0)
         
         toolbar_line1.addWidget(QLabel("分箱方法："))
         toolbar_line1.addWidget(self.method_combo)
@@ -507,22 +509,21 @@ class CombinedView(QWidget):
         toolbar_line1.addWidget(self.run_btn)
         toolbar_line1.addWidget(self.save_btn)
         
-        # 配置面板区域（单独一行，垂直布局）
+        # 配置面板区域（垂直布局：通用配置 + 方法特有配置）
         config_container = QWidget()
-        config_container.setMinimumWidth(400)  # 确保最小宽度
+        config_container.setMinimumWidth(400)
         config_layout = QVBoxLayout(config_container)
         config_layout.setContentsMargins(0, 0, 0, 0)
-        config_layout.setSpacing(4)
+        config_layout.setSpacing(2)
         
-        # 配置堆叠面板设置 - 设置为固定高度策略
-        self.config_stack.setSizePolicy(
-            self.config_stack.sizePolicy().horizontalPolicy(),
-            self.config_stack.sizePolicy().verticalPolicy()
-        )
+        # 1. 通用配置（始终可见）
+        config_layout.addWidget(self.common_config_widget, stretch=0)
         
+        # 2. 方法特有配置（堆栈切换）
         config_layout.addWidget(self.config_stack, stretch=0)
-        # 设置配置容器固定高度，防止拉伸
-        config_container.setMaximumHeight(120)
+        
+        # 设置配置容器高度范围
+        config_container.setMaximumHeight(200)
         
         # 汇总到右侧布局
         right_layout.addWidget(self.stats_panel)
@@ -607,13 +608,10 @@ class CombinedView(QWidget):
             if method_key == 'best_ks':
                 kwargs = {'max_bins': n_bins, 'initial_bins': 64}
             if method_key == 'smart_monotonic':
-                # 智能单调分箱参数
-                trend = self.smart_monotonic_trend_combo.currentData()
-                kwargs = {
-                    'max_bins': n_bins,
-                    'min_bins': 2,
-                    'monotonic_trend': trend,
-                }
+                # 智能单调分箱参数 - 从专用配置面板获取
+                kwargs = self.smart_monotonic_config.get_config()
+                kwargs['max_bins'] = n_bins
+                kwargs['min_bins'] = max(2, n_bins // 3)  # 最小箱数设为最大箱数的1/3
             kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
             kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
         
@@ -709,6 +707,31 @@ class CombinedView(QWidget):
         except Exception:
             pass
 
+    def _calculate_monotonicity_score(self, rates: list) -> int:
+        """计算数据单调性评分 (0-100)
+        
+        算法:
+        - 计算递增和递减的违反点数
+        - 单调性分数 = (1 - 违反点数/总点数) * 100
+        """
+        if len(rates) < 2:
+            return 100
+        
+        n = len(rates) - 1
+        asc_violations = 0
+        desc_violations = 0
+        
+        for i in range(n):
+            if rates[i] > rates[i+1] + 1e-6:
+                asc_violations += 1
+            if rates[i] < rates[i+1] - 1e-6:
+                desc_violations += 1
+        
+        # 取最符合的趋势（递增或递减）
+        min_violations = min(asc_violations, desc_violations)
+        score = int((1 - min_violations / n) * 100)
+        return score
+
     def _setup_bottom_anchor(self, plot: pg.PlotWidget):
         try:
             pi = plot.getPlotItem()
@@ -761,8 +784,8 @@ class CombinedView(QWidget):
             self._apply_display_config(cfg)
             self.render_binning(metrics, cfg)
         else:
-            # 没有分箱结果时，默认选择最优分箱
-            self._set_default_optimal_config()
+            # 没有分箱结果时，默认选择智能分箱
+            self._set_default_config()
 
     def _apply_display_config(self, cfg: BinningConfig):
         """应用保存的配置到 UI"""
@@ -784,6 +807,13 @@ class CombinedView(QWidget):
             except Exception:
                 pass
         
+        # 恢复智能分箱配置
+        if method == 'smart_monotonic':
+            try:
+                self.smart_monotonic_config.set_config(cfg.params or {})
+            except Exception:
+                pass
+        
         # 恢复传统配置参数
         params = (cfg.params or {})
         precision_mode = params.get("boundary_precision_mode", "auto")
@@ -802,14 +832,12 @@ class CombinedView(QWidget):
             self.precision_digits_spin.setValue(0)
         self._update_precision_inputs()
 
-    def _set_default_optimal_config(self):
-        """设置默认配置为最优分箱，并清空之前的结果展示"""
+    def _set_default_config(self):
+        """设置默认配置为智能分箱，并清空之前的结果展示"""
         try:
-            # 默认选择最优分箱
-            idx = self.method_combo.findData('optimal')
-            if idx != -1:
-                self.method_combo.setCurrentIndex(idx)
-                self.on_method_changed(idx)
+            # 默认选择智能分箱（索引0）
+            self.method_combo.setCurrentIndex(0)
+            self.on_method_changed(0)
             
             # 重置 Optbinning 配置为默认
             if self.optbinning_config is not None:
@@ -930,6 +958,10 @@ class CombinedView(QWidget):
                     # 设置Y轴范围并启用自动调整
                     self.dist_plot_right_axis.setYRange(0, max(bad_rates) * 1.2 if max(bad_rates) > 0 else 1)
                     self.dist_plot_right_axis.enableAutoRange(axis='y', enable=True)
+                    
+                    # 计算单调率并更新标题
+                    mono_score = self._calculate_monotonicity_score(bad_rates)
+                    self.dist_plot.setTitle(f"分布图 (数据单调性: {mono_score}%)")
             
             try:
                 xmin, xmax = float(x.min()), float(x.max())
@@ -970,6 +1002,10 @@ class CombinedView(QWidget):
                     )
                     self.dist_plot_right_axis.addItem(curve)
                     self.dist_plot_right_axis.setYRange(0, max(bad_rates) * 1.2 if max(bad_rates) > 0 else 1)
+                    
+                    # 计算单调率并更新标题
+                    mono_score = self._calculate_monotonicity_score(bad_rates)
+                    self.dist_plot.setTitle(f"分布图 (数据单调性: {mono_score}%)")
                     self.dist_plot_right_axis.enableAutoRange(axis='y', enable=True)
             
             try:
@@ -986,21 +1022,23 @@ class CombinedView(QWidget):
         """分箱方法切换处理 - 动态切换配置面板"""
         method = self.method_combo.currentData()
         
-        if method == "optimal" and self.optbinning_config is not None:
-            self.config_stack.setCurrentIndex(1)  # 显示 Optbinning 配置面板
-            # 更新样本数参考
+        # 堆栈索引：0=空, 1=智能分箱配置, 2=Optbinning配置（如果有）
+        if method == "smart_monotonic":
+            self.config_stack.setCurrentIndex(1)  # 显示智能分箱配置
+            config_container = self.config_stack.parentWidget()
+            if config_container:
+                config_container.setMaximumHeight(180)
+        elif method == "optimal" and self.optbinning_config is not None:
+            self.config_stack.setCurrentIndex(2)  # 显示 Optbinning 配置
             self.optbinning_config.set_n_samples(self.controller.get_sample_count())
-            # 调整容器高度以容纳展开的高级选项
-            self.config_stack.parentWidget().setMaximumHeight(16777215)  # 取消高度限制
+            config_container = self.config_stack.parentWidget()
+            if config_container:
+                config_container.setMaximumHeight(400)
         else:
-            self.config_stack.setCurrentIndex(0)  # 显示传统配置面板
-            # 限制容器高度，防止传统配置面板占用太多空间
-            self.config_stack.parentWidget().setMaximumHeight(120)
-        
-        # 控制智能单调分箱配置的显示/隐藏
-        is_smart_monotonic = (method == "smart_monotonic")
-        self.smart_monotonic_trend_combo.setVisible(is_smart_monotonic)
-        self.smart_monotonic_trend_label.setVisible(is_smart_monotonic)
+            self.config_stack.setCurrentIndex(0)  # 显示空面板（只有通用配置）
+            config_container = self.config_stack.parentWidget()
+            if config_container:
+                config_container.setMaximumHeight(80)
 
     def run_binning(self):
         if not self.current_feature: 
@@ -1050,13 +1088,10 @@ class CombinedView(QWidget):
             if method_key == 'best_ks':
                 kwargs = {'max_bins': n_bins, 'initial_bins': 64}
             if method_key == 'smart_monotonic':
-                # 智能单调分箱参数
-                trend = self.smart_monotonic_trend_combo.currentData()
-                kwargs = {
-                    'max_bins': n_bins,
-                    'min_bins': 2,
-                    'monotonic_trend': trend,
-                }
+                # 智能单调分箱参数 - 从专用配置面板获取
+                kwargs = self.smart_monotonic_config.get_config()
+                kwargs['max_bins'] = n_bins
+                kwargs['min_bins'] = max(2, n_bins // 3)  # 最小箱数设为最大箱数的1/3
             kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
             kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
         
