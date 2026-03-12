@@ -209,7 +209,7 @@ All algorithms are in `src/core/binning/`:
 | 参数 | 类型 | 默认值 | 说明 |
 |-----|------|-------|------|
 | `max_bins` | int | 10 | 最大箱数（UI上"箱数"控制） |
-| `min_bins` | int | 2 | 最小箱数 |
+| `min_bins` | int | **3** | 最小箱数（默认3，避免2分箱业务价值过低） |
 | `monotonic_trend` | str | 'auto' | 单调趋势：'auto'/'ascending'/'descending' |
 | `adjustment_method` | str | 'auto' | 调整方法：'auto'/'merge'/'pava'/'none' |
 | `iv_tolerance` | float | 0.1 | IV损失容忍度（0-1），默认10% |
@@ -229,7 +229,7 @@ All algorithms are in `src/core/binning/`:
 2. **调整方法选择**:
    - `merge`: 贪婪合并违反单调性的相邻箱
    - `pava`: 平滑bad rate使其单调，保持边界不变
-3. **保底2分箱**: 中位数切分，确保100%有解
+3. **保底3分箱**: 33%/67%分位数切分（默认最少3箱，避免2分箱业务价值过低）
 
 **关键修复记录** (2026-03-12):
 ```
