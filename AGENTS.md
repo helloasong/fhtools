@@ -167,6 +167,49 @@ All algorithms are in `src/core/binning/`:
 | ChiMerge | `ChiMergeBinner` | Supervised | Chi-square based merging (pre-binning + merge) |
 | Best-KS | `BestKSBinner` | Supervised | Greedy KS maximization |
 | Manual | `ManualBinner` | Manual | User-specified cutpoints |
+| Smart Monotonic | `SmartMonotonicBinner` | Supervised | **智能单调分箱** - 自动追求单调性，多层降级策略保证100%有解 (见下方详细说明) |
+
+### SmartMonotonicBinner 详细说明
+
+**文件位置**: `src/core/binning/smart_monotonic.py`  
+**测试文件**: `tests/test_smart_monotonic.py` (23个测试用例)
+
+**核心特点**:
+- 自动化追求单调性，无需人工调整参数
+- 多层降级策略，保证100%有解（即使退化为2箱）
+- IV损失可控，优先保留更高箱数
+
+**算法策略**（按优先级）:
+1. **决策树分箱**: 使用CART生成初始切分，追求IV最大化
+2. **强制单调合并**: 贪婪合并违反单调性的相邻箱，优先保留更多箱数
+3. **保底2分箱**: 中位数切分，确保100%有解
+
+**关键修复记录** (2026-03-12):
+```
+问题: 5箱需求实际只返回2箱
+原因: 决策树5箱不单调时继续尝试更少箱数，2箱总是单调导致直接返回
+修复: 每次决策树分箱后立即强制单调合并，成功则返回不再尝试更少箱数
+
+修复效果:
+- feature_01: 2箱 → 3箱
+- feature_02: 2箱 → 5箱 (达目标)
+- feature_03: 2箱 → 5箱 (达目标)
+- feature_04: 2箱 → 4箱  
+- feature_05: 2箱 → 3箱
+```
+
+**使用示例**:
+```python
+from src.core.binning.smart_monotonic import SmartMonotonicBinner
+
+binner = SmartMonotonicBinner()
+binner.fit(x, y, max_bins=5, min_bins=2, monotonic_trend='auto')
+
+print(f"分箱边界: {binner.splits}")
+print(f"实际箱数: {len(binner.splits)-1}")
+print(f"调整方法: {binner.adjustment_method}")  # 'none', 'forced_merge', 'fallback'
+print(f"IV损失: {binner.iv_loss:.1%}")
+```
 
 ### Algorithm Interface
 ```python
@@ -267,3 +310,24 @@ Three strategies supported across all algorithms:
 ### Import Errors
 - Set `PYTHONPATH=. ` or use `python -m` syntax
 - Verify `src/__init__.py` exists
+
+## ⚠️ 重要：Git 操作规范
+
+**除非用户明确要求，否则不要自动执行 `git push`**
+
+正确的Git提交流程:
+```bash
+# 1. 添加更改到暂存区
+git add -A
+
+# 2. 提交到本地仓库
+git commit -m "描述信息"
+
+# 3. 推送到远程仓库 - 必须等待用户明确确认后才执行
+git push origin main  # ❌ 不要自动执行此步骤
+```
+
+**规则**:
+- ✅ 可以自动执行 `git add` 和 `git commit`
+- ❌ **永远不要**在没有用户明确许可的情况下执行 `git push`
+- 推送前必须询问用户: "是否推送到GitHub？"
