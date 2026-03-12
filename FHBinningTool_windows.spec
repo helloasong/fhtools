@@ -30,6 +30,10 @@ a = Analysis(
         'pandas._libs.tslibs.base',
         'openpyxl',
         'qt_material',
+        # Optimal Binning (本次新增)
+        'optbinning',
+        'optbinning.binning',
+        'optbinning.binning.binning',
     ],
     hookspath=[],
     hooksconfig={},

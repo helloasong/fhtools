@@ -1,18 +1,225 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QLabel, QSplitter,
-    QComboBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QAbstractScrollArea, QMessageBox
+    QComboBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QAbstractScrollArea, QMessageBox,
+    QStackedWidget, QProgressDialog, QDialog, QProgressBar, QTextEdit, QListWidgetItem as QListWidgetItemClass,
+    QGroupBox, QGridLayout, QScrollArea
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QGridLayout, QGraphicsDropShadowEffect
 import pyqtgraph as pg
 import numpy as np
 import pandas as pd
+from typing import List, Dict, Tuple, Optional
 
 from src.controllers.project_controller import ProjectController
 from src.data.models import ProjectState, VariableStats, BinningMetrics, BinningConfig
 from src.services.recommendation_service import recommend_method, method_to_cn
 from src.utils.formatting import format_bin_label, parse_precision_step, resolve_precision_step
+from src.ui.widgets.optbinning_config_panel_compact import OptbinningConfigPanel
+from src.core.binning import OPTBINNING_AVAILABLE
+
+# 单调性趋势图标映射
+TREND_ICONS = {
+    'auto': '📊',
+    'auto_heuristic': '📊',
+    'ascending': '↗️',
+    'descending': '↘️',
+    'concave': '⌣',
+    'convex': '⌢',
+    'peak': '⛰️',
+    'valley': '🏞️',
+    'peak_heuristic': '⛰️',
+    'valley_heuristic': '🏞️',
+    'auto_asc_desc': '📊',
+}
+
+TREND_LABELS = {
+    'auto': '自动',
+    'ascending': '递增',
+    'descending': '递减',
+    'concave': '凹形',
+    'convex': '凸形',
+    'peak': '单峰',
+    'valley': '单谷',
+}
+
+
+class BatchBinningDialog(QDialog):
+    """批量分箱进度对话框"""
+    
+    cancelled = pyqtSignal()
+    
+    def __init__(self, parent=None, total_count: int = 0):
+        super().__init__(parent)
+        self.total_count = total_count
+        self.cancelled_flag = False
+        self.results = {}  # 存储每个变量的结果
+        self.init_ui()
+    
+    def init_ui(self):
+        self.setWindowTitle("批量分箱")
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(400)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        
+        # 标题和进度
+        self.title_label = QLabel(f"正在批量分箱 ({self.total_count} 个变量)")
+        self.title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        layout.addWidget(self.title_label)
+        
+        # 总体进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(self.total_count)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p% (%v/%m)")
+        layout.addWidget(self.progress_bar)
+        
+        # 当前变量
+        self.current_label = QLabel("准备开始...")
+        self.current_label.setStyleSheet("color: #666;")
+        layout.addWidget(self.current_label)
+        
+        # 变量状态列表
+        self.status_group = QGroupBox("处理状态")
+        status_layout = QVBoxLayout(self.status_group)
+        
+        self.status_list = QListWidget()
+        self.status_list.setMaximumHeight(200)
+        status_layout.addWidget(self.status_list)
+        
+        layout.addWidget(self.status_group)
+        
+        # 统计信息
+        self.stats_label = QLabel("成功: 0 | 失败: 0 | 等待: 0")
+        layout.addWidget(self.stats_label)
+        
+        # 按钮区域
+        btn_layout = QHBoxLayout()
+        
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.clicked.connect(self.on_cancel)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.cancel_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # 初始化状态列表
+        self._init_status_list()
+    
+    def _init_status_list(self):
+        """初始化状态列表（将在设置变量名后调用）"""
+        pass
+    
+    def set_variable_names(self, var_names: List[str]):
+        """设置要处理的变量名列表"""
+        self.var_names = var_names
+        self.status_items = {}
+        self.status_list.clear()
+        
+        for name in var_names:
+            item = QListWidgetItemClass(f"⏳ {name} - 等待中...")
+            self.status_list.addItem(item)
+            self.status_items[name] = item
+        
+        self._update_stats()
+    
+    def update_progress(self, current: int, total: int, var_name: str):
+        """更新进度"""
+        self.progress_bar.setValue(current)
+        self.current_label.setText(f"正在处理: {var_name}")
+        
+        # 更新当前变量状态为处理中
+        if var_name in self.status_items:
+            self.status_items[var_name].setText(f"🟡 {var_name} - 求解中...")
+    
+    def mark_success(self, var_name: str, iv_value: float = None):
+        """标记变量处理成功"""
+        if var_name in self.status_items:
+            iv_str = f"IV: {iv_value:.4f}" if iv_value is not None else ""
+            self.status_items[var_name].setText(f"🟢 {var_name} - 完成 {iv_str}")
+            self.results[var_name] = {'success': True, 'iv': iv_value}
+        self._update_stats()
+    
+    def mark_failed(self, var_name: str, error: str = ""):
+        """标记变量处理失败"""
+        if var_name in self.status_items:
+            error_short = error[:30] + "..." if len(error) > 30 else error
+            self.status_items[var_name].setText(f"🔴 {var_name} - 失败 ({error_short})")
+            self.results[var_name] = {'success': False, 'error': error}
+        self._update_stats()
+    
+    def _update_stats(self):
+        """更新统计信息"""
+        success = sum(1 for r in self.results.values() if r.get('success'))
+        failed = sum(1 for r in self.results.values() if not r.get('success'))
+        waiting = self.total_count - len(self.results)
+        self.stats_label.setText(f"成功: {success} | 失败: {failed} | 等待: {waiting}")
+    
+    def on_cancel(self):
+        """取消操作"""
+        self.cancelled_flag = True
+        self.cancelled.emit()
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.setText("正在取消...")
+    
+    def is_cancelled(self) -> bool:
+        """检查是否已取消"""
+        return self.cancelled_flag
+    
+    def show_summary(self, success_list: List[str], failed_list: List[Tuple[str, str]]):
+        """显示完成后的汇总信息"""
+        self.title_label.setText("批量分箱完成")
+        self.current_label.setText(f"完成: {len(success_list)} 成功, {len(failed_list)} 失败")
+        self.cancel_btn.setText("关闭")
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.clicked.disconnect()
+        self.cancel_btn.clicked.connect(self.accept)
+
+
+class BatchBinningWorker(QThread):
+    """批量分箱工作线程"""
+    
+    progress = pyqtSignal(int, int, str)  # 当前进度, 总数, 当前变量
+    item_finished = pyqtSignal(str, object, bool, str)  # 变量名, 指标, 是否成功, 错误信息
+    finished_with_result = pyqtSignal(list, list)  # 成功列表, 失败列表
+    
+    def __init__(self, controller: ProjectController, features: List[str], method: str, **kwargs):
+        super().__init__()
+        self.controller = controller
+        self.features = features
+        self.method = method
+        self.kwargs = kwargs
+        self._cancelled = False
+    
+    def cancel(self):
+        """标记取消"""
+        self._cancelled = True
+    
+    def run(self):
+        """执行批量分箱"""
+        success_list = []
+        failed_list = []
+        
+        for i, feature in enumerate(self.features):
+            if self._cancelled:
+                break
+            
+            self.progress.emit(i + 1, len(self.features), feature)
+            
+            try:
+                self.controller.run_binning(feature, method=self.method, **self.kwargs)
+                metrics = self.controller.state.binning_results.get(feature)
+                success_list.append(feature)
+                self.item_finished.emit(feature, metrics, True, "")
+            except Exception as e:
+                failed_list.append((feature, str(e)))
+                self.item_finished.emit(feature, None, False, str(e))
+        
+        self.finished_with_result.emit(success_list, failed_list)
 
 
 class CombinedView(QWidget):
@@ -25,6 +232,8 @@ class CombinedView(QWidget):
         self._current_centers = None
         self._current_bad_rates = None
         self._skip_autorange_once = False
+        self.batch_dialog = None
+        self.batch_worker = None
         self.init_ui()
         self.setup_connections()
 
@@ -34,12 +243,55 @@ class CombinedView(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # 左侧：变量列表 + 搜索（简化为列表）
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(4)
+        
+        # 批量分箱按钮和选择计数
+        self.batch_btn_layout = QHBoxLayout()
+        self.batch_btn = QPushButton("批量分箱")
+        self.batch_btn.setToolTip("Ctrl+点击 或 Shift+点击 选择多个变量")
+        self.batch_btn.clicked.connect(self.on_batch_binning)
+        self.batch_btn.setEnabled(False)  # 初始禁用，等有选择时启用
+        
+        self.selection_count_label = QLabel("已选择: 0")
+        self.selection_count_label.setStyleSheet("color: #666; font-size: 12px;")
+        
+        self.batch_btn_layout.addWidget(self.batch_btn)
+        self.batch_btn_layout.addWidget(self.selection_count_label)
+        self.batch_btn_layout.addStretch()
+        
+        left_layout.addLayout(self.batch_btn_layout)
+        
+        # 变量列表 - 启用多选模式
         self.feature_list = QListWidget()
+        self.feature_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.feature_list.itemClicked.connect(self.on_feature_selected)
+        self.feature_list.itemSelectionChanged.connect(self._update_selection_count)
+        
+        left_layout.addWidget(self.feature_list)
+        
+        # 多选提示
+        self.multi_select_hint = QLabel("💡 Ctrl+点击多选, Shift+范围选择")
+        self.multi_select_hint.setStyleSheet("color: #888; font-size: 10px;")
+        left_layout.addWidget(self.multi_select_hint)
 
-        # 右侧：紧凑信息 + 小图 + 配置
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
+        # 右侧：使用 QScrollArea 包装内容，支持滚动
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        # 设置滚动区域大小策略
+        right_scroll.setSizePolicy(
+            right_scroll.sizePolicy().horizontalPolicy(),
+            right_scroll.sizePolicy().verticalPolicy()
+        )
+        
+        # 右侧内容容器
+        right_content = QWidget()
+        right_layout = QVBoxLayout(right_content)
         right_layout.setContentsMargins(8, 8, 8, 8)
         right_layout.setSpacing(6)
 
@@ -61,83 +313,291 @@ class CombinedView(QWidget):
         self.recommend_label = QLabel("")
         self.recommend_label.setStyleSheet("color:#888;font-size:12px;")
 
-        # 中部：分布图（小型）
+        # 中部：分布图
         self.dist_plot = pg.PlotWidget(title="分布图")
-        self._compact_plot(self.dist_plot, height=200)
+        self.dist_plot.setMinimumHeight(150)
+        self.dist_plot.setMaximumHeight(250)
+        self._compact_plot(self.dist_plot, height=180)
         self._setup_bottom_anchor(self.dist_plot)
         self.dist_card = self._wrap_card(self.dist_plot)
 
-        # 中部：分箱图（小型）：柱状=样本数，折线=Bad Rate
+        # 中部：分箱图
         self.bin_plot = pg.PlotWidget(title="分箱图")
-        self._compact_plot(self.bin_plot, height=220)
+        self.bin_plot.setMinimumHeight(150)
+        self.bin_plot.setMaximumHeight(250)
+        self._compact_plot(self.bin_plot, height=180)
         self._setup_bottom_anchor(self.bin_plot)
         self.bin_plot.scene().sigMouseMoved.connect(self.on_mouse_moved)
         self.bin_card = self._wrap_card(self.bin_plot)
+        
+        # 分箱图提示（双击分割线设置切点）
+        self.bin_hint_label = QLabel("💡 提示：双击红色分割线可设置精确切点值")
+        self.bin_hint_label.setStyleSheet("color:#666; font-size:11px; padding:2px 4px;")
 
         # 分箱明细表
         self.bin_table = QTableWidget()
         self.bin_table.setColumnCount(10)
         self.bin_table.setHorizontalHeaderLabels(["范围", "样本数", "占比", "坏样本数", "坏样本率", "好样本数", "好样本率", "WOE", "IV", "Lift"])
-        # 移除固定高度，按内容自适应
+        # 禁用垂直滚动条，完整展示所有行
+        self.bin_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.bin_table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+        self.bin_table.setMinimumHeight(100)
         self.bin_table_card = self._wrap_card(self.bin_table)
 
         # 下部：分箱配置（紧凑工具栏）
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
-        self.method_combo = QComboBox()
-        method_map = [
-            ("等频分箱", "equal_freq"),
-            ("等距分箱", "equal_width"),
-            ("决策树分箱", "decision_tree"),
-            ("卡方分箱", "chi_merge"),
-            ("Best-KS 分箱", "best_ks"),
-            ("自定义切点", "manual"),
-        ]
-        for label, key in method_map:
-            self.method_combo.addItem(label, key)
-        self.n_bins_spin = QSpinBox(); self.n_bins_spin.setRange(2, 20); self.n_bins_spin.setValue(5)
+        # 首先创建设置控件
+        self.n_bins_spin = QSpinBox()
+        self.n_bins_spin.setRange(2, 20)
+        self.n_bins_spin.setValue(5)
         self.n_bins_spin.setPrefix("箱数：")
-        self.missing_combo = QComboBox();
+        
+        self.missing_combo = QComboBox()
         for label, key in [("单独成箱", "separate"), ("忽略", "ignore"), ("归并", "merge")]:
             self.missing_combo.addItem(label, key)
 
         self.precision_mode_combo = QComboBox()
         for label, key in [("自动", "auto"), ("小数点后几位", "decimal"), ("整数位（前几位）", "integer")]:
             self.precision_mode_combo.addItem(label, key)
+        
         self.precision_digits_spin = QSpinBox()
         self.precision_digits_spin.setRange(0, 12)
         self.precision_digits_spin.setValue(0)
+        
         self.run_btn = QPushButton("运行")
         self.save_btn = QPushButton("确认并保存")
-        toolbar.addWidget(QLabel("分箱方法：")); toolbar.addWidget(self.method_combo)
-        toolbar.addWidget(self.n_bins_spin)
-        toolbar.addWidget(QLabel("缺失值策略：")); toolbar.addWidget(self.missing_combo)
-        toolbar.addWidget(QLabel("边界精度："))
-        toolbar.addWidget(self.precision_mode_combo)
-        toolbar.addWidget(self.precision_digits_spin)
-        toolbar.addWidget(self.run_btn); toolbar.addWidget(self.save_btn)
-        toolbar.addStretch()
-
+        
+        # 配置面板区域（使用 QStackedWidget 切换）
+        self.config_stack = QStackedWidget()
+        
+        # 传统配置面板（将原有控件移入）
+        self.traditional_config = QWidget()
+        self.traditional_config.setMaximumHeight(80)  # 限制最大高度
+        trad_layout = QHBoxLayout(self.traditional_config)
+        trad_layout.setContentsMargins(8, 8, 8, 8)
+        trad_layout.setSpacing(12)
+        
+        # 将原有配置控件移到传统面板
+        trad_layout.addWidget(QLabel("箱数："))
+        trad_layout.addWidget(self.n_bins_spin)
+        trad_layout.addWidget(QLabel("缺失值策略："))
+        trad_layout.addWidget(self.missing_combo)
+        trad_layout.addWidget(QLabel("边界精度："))
+        trad_layout.addWidget(self.precision_mode_combo)
+        trad_layout.addWidget(self.precision_digits_spin)
+        trad_layout.addStretch()  # 添加弹性空间
+        
+        self.config_stack.addWidget(self.traditional_config)
+        
+        # Optbinning 配置面板（仅当 optbinning 可用时创建）
+        self.optbinning_config = None
+        if OPTBINNING_AVAILABLE:
+            self.optbinning_config = OptbinningConfigPanel()
+            self.optbinning_config.set_n_samples(self.controller.get_sample_count())
+            self.config_stack.addWidget(self.optbinning_config)
+            self.config_stack.setCurrentIndex(1)  # 显示 Optbinning
+        else:
+            self.config_stack.setCurrentIndex(0)  # 显示传统
+        
+        # 构建工具栏（第一行：分箱方法 + 运行按钮）
+        toolbar_line1 = QHBoxLayout()
+        toolbar_line1.setSpacing(6)
+        
+        # 分箱方法下拉框
+        self.method_combo = QComboBox()
+        
+        # 构建方法列表，将最优分箱置顶
+        method_map = []
+        if OPTBINNING_AVAILABLE:
+            method_map.append(("🎯 最优分箱 (推荐)", "optimal"))
+            method_map.append(("───────────────", "separator"))
+        
+        method_map.extend([
+            ("等频分箱", "equal_freq"),
+            ("等距分箱", "equal_width"),
+            ("决策树分箱", "decision_tree"),
+            ("卡方分箱", "chi_merge"),
+            ("Best-KS 分箱", "best_ks"),
+            ("自定义切点", "manual"),
+        ])
+        
+        for label, key in method_map:
+            if key == "separator":
+                self.method_combo.addItem(label)
+                idx = self.method_combo.count() - 1
+                self.method_combo.setItemData(idx, False, Qt.ItemDataRole.UserRole - 1)
+            else:
+                self.method_combo.addItem(label, key)
+        
+        if OPTBINNING_AVAILABLE:
+            self.method_combo.setCurrentIndex(0)
+        
+        toolbar_line1.addWidget(QLabel("分箱方法："))
+        toolbar_line1.addWidget(self.method_combo)
+        toolbar_line1.addStretch()
+        toolbar_line1.addWidget(self.run_btn)
+        toolbar_line1.addWidget(self.save_btn)
+        
+        # 配置面板区域（单独一行，垂直布局）
+        config_container = QWidget()
+        config_container.setMinimumWidth(400)  # 确保最小宽度
+        config_layout = QVBoxLayout(config_container)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(4)
+        
+        # 配置堆叠面板设置 - 设置为固定高度策略
+        self.config_stack.setSizePolicy(
+            self.config_stack.sizePolicy().horizontalPolicy(),
+            self.config_stack.sizePolicy().verticalPolicy()
+        )
+        
+        config_layout.addWidget(self.config_stack, stretch=0)
+        # 设置配置容器固定高度，防止拉伸
+        config_container.setMaximumHeight(120)
+        
         # 汇总到右侧布局
         right_layout.addWidget(self.stats_panel)
         right_layout.addWidget(self.target_label)
         right_layout.addWidget(self.recommend_label)
-        right_layout.addWidget(self.dist_card)
-        right_layout.addWidget(self.bin_card)
-        right_layout.addLayout(toolbar)
-        right_layout.addWidget(self.bin_table_card)
+        right_layout.addWidget(self.dist_card, stretch=0)  # 分布图固定高度
+        right_layout.addWidget(self.bin_card, stretch=0)   # 分箱图固定高度
+        right_layout.addWidget(self.bin_hint_label)        # 分箱图提示
+        right_layout.addLayout(toolbar_line1)
+        right_layout.addWidget(config_container, stretch=0)  # 配置面板固定高度
+        right_layout.addWidget(self.bin_table_card, stretch=0)
+        
+        # 将内容容器添加到滚动区域
+        right_scroll.setWidget(right_content)
 
-        splitter.addWidget(self.feature_list)
-        splitter.addWidget(right)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_scroll)
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter)
 
         # 事件绑定
+        self.method_combo.currentIndexChanged.connect(self.on_method_changed)
         self.run_btn.clicked.connect(self.run_binning)
         self.missing_combo.currentTextChanged.connect(self.on_missing_strategy_changed)
         self.precision_mode_combo.currentIndexChanged.connect(self._update_precision_inputs)
         self._update_precision_inputs()
+
+    def _update_selection_count(self):
+        """更新选择计数显示"""
+        count = len(self.feature_list.selectedItems())
+        self.selection_count_label.setText(f"已选择: {count}")
+        self.batch_btn.setEnabled(count > 0)
+        if count > 0:
+            self.batch_btn.setText(f"批量分箱 ({count})")
+        else:
+            self.batch_btn.setText("批量分箱")
+
+    def on_batch_binning(self):
+        """处理批量分箱按钮点击"""
+        selected_items = self.feature_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "提示", "请先选择变量")
+            return
+        
+        # 获取选择的变量名
+        var_names = [item.text() for item in selected_items]
+        
+        # 检查目标变量
+        method_key = self.method_combo.currentData()
+        supervised_methods = ['decision_tree', 'chi_merge', 'best_ks', 'optimal']
+        
+        if method_key in supervised_methods and not self.controller.state.target_col:
+            QMessageBox.warning(self, "提示", "未设置目标变量，请先设置目标变量")
+            return
+        
+        # 确认对话框
+        var_list_text = "\n".join(var_names[:15])
+        if len(var_names) > 15:
+            var_list_text += f"\n... 等共 {len(var_names)} 个变量"
+        
+        reply = QMessageBox.question(
+            self, "批量分箱确认",
+            f"将对以下 {len(var_names)} 个变量执行分箱:\n\n{var_list_text}\n\n分箱方法: {self.method_combo.currentText()}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self._start_batch_binning(var_names)
+
+    def _start_batch_binning(self, var_names: List[str]):
+        """启动批量分箱"""
+        method_key = self.method_combo.currentData()
+        
+        # 获取分箱参数
+        if method_key == 'optimal':
+            kwargs = self.optbinning_config.get_config()
+        else:
+            n_bins = self.n_bins_spin.value()
+            kwargs = {'n_bins': n_bins}
+            if method_key in ['decision_tree', 'chi_merge']:
+                kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
+            if method_key == 'best_ks':
+                kwargs = {'max_bins': n_bins, 'initial_bins': 64}
+            kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
+            kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
+        
+        # 创建进度对话框
+        self.batch_dialog = BatchBinningDialog(self, len(var_names))
+        self.batch_dialog.set_variable_names(var_names)
+        self.batch_dialog.cancelled.connect(self._cancel_batch_binning)
+        
+        # 创建工作线程
+        self.batch_worker = BatchBinningWorker(
+            self.controller, var_names, method_key or 'optimal', **kwargs
+        )
+        self.batch_worker.progress.connect(self._on_batch_progress)
+        self.batch_worker.item_finished.connect(self._on_batch_item_finished)
+        self.batch_worker.finished_with_result.connect(self._on_batch_finished)
+        
+        self.batch_worker.start()
+        self.batch_dialog.exec()
+
+    def _on_batch_progress(self, current: int, total: int, var_name: str):
+        """处理批量分箱进度更新"""
+        if self.batch_dialog:
+            self.batch_dialog.update_progress(current, total, var_name)
+
+    def _on_batch_item_finished(self, var_name: str, metrics: BinningMetrics, success: bool, error: str):
+        """处理单个变量分箱完成"""
+        if not self.batch_dialog:
+            return
+        
+        if success and metrics:
+            # 计算 IV 值
+            iv_total = metrics.summary_table['iv'].sum() if 'iv' in metrics.summary_table.columns else 0
+            self.batch_dialog.mark_success(var_name, iv_total)
+        else:
+            self.batch_dialog.mark_failed(var_name, error)
+
+    def _on_batch_finished(self, success_list: List[str], failed_list: List[Tuple[str, str]]):
+        """批量分箱完成"""
+        if self.batch_dialog:
+            self.batch_dialog.show_summary(success_list, failed_list)
+        
+        # 刷新当前选中变量的显示
+        if self.current_feature and self.current_feature in success_list:
+            if self.current_feature in self.controller.state.binning_results:
+                metrics = self.controller.state.binning_results[self.current_feature]
+                cfg = self.controller.state.binning_configs[self.current_feature]
+                self.render_binning(metrics, cfg)
+        
+        # 显示完成提示
+        if failed_list:
+            QMessageBox.warning(
+                self, "批量分箱完成",
+                f"完成! {len(success_list)} 个成功, {len(failed_list)} 个失败。\n\n"
+                f"失败变量:\n" + "\n".join([f"{name}: {err}" for name, err in failed_list[:5]])
+            )
+        else:
+            QMessageBox.information(self, "批量分箱完成", f"全部 {len(success_list)} 个变量分箱成功!")
+
+    def _cancel_batch_binning(self):
+        """取消批量分箱"""
+        if self.batch_worker:
+            self.batch_worker.cancel()
 
     def _update_precision_inputs(self):
         mode = self.precision_mode_combo.currentData()
@@ -196,20 +656,44 @@ class CombinedView(QWidget):
         self.feature_list.clear()
         if state.feature_cols:
             self.feature_list.addItems(state.feature_cols)
+        # 更新样本数
+        if OPTBINNING_AVAILABLE and self.optbinning_config is not None:
+            self.optbinning_config.set_n_samples(self.controller.get_sample_count())
 
     def on_feature_selected(self, item):
         self.current_feature = item.text()
         self.refresh_stats_and_plots()
-        # 如果已有分箱结果，渲染，否则默认运行一次等频
+        # 如果已有分箱结果，渲染结果和配置
         if self.current_feature in self.controller.state.binning_results:
             metrics = self.controller.state.binning_results[self.current_feature]
             cfg = self.controller.state.binning_configs[self.current_feature]
             self._apply_display_config(cfg)
             self.render_binning(metrics, cfg)
         else:
-            self.run_binning()
+            # 没有分箱结果时，默认选择最优分箱
+            self._set_default_optimal_config()
 
     def _apply_display_config(self, cfg: BinningConfig):
+        """应用保存的配置到 UI"""
+        # 恢复分箱方法
+        method = cfg.method
+        try:
+            method_idx = self.method_combo.findData(method)
+            if method_idx != -1:
+                self.method_combo.setCurrentIndex(method_idx)
+                # 触发方法切换，更新配置面板
+                self.on_method_changed(method_idx)
+        except Exception:
+            pass
+        
+        # 恢复 Optbinning 配置（如果是最优分箱）
+        if method == 'optimal' and self.optbinning_config is not None:
+            try:
+                self.optbinning_config.set_config(cfg.params or {})
+            except Exception:
+                pass
+        
+        # 恢复传统配置参数
         params = (cfg.params or {})
         precision_mode = params.get("boundary_precision_mode", "auto")
         precision_digits = params.get("boundary_precision_digits", 0)
@@ -226,6 +710,47 @@ class CombinedView(QWidget):
         except Exception:
             self.precision_digits_spin.setValue(0)
         self._update_precision_inputs()
+
+    def _set_default_optimal_config(self):
+        """设置默认配置为最优分箱，并清空之前的结果展示"""
+        try:
+            # 默认选择最优分箱
+            idx = self.method_combo.findData('optimal')
+            if idx != -1:
+                self.method_combo.setCurrentIndex(idx)
+                self.on_method_changed(idx)
+            
+            # 重置 Optbinning 配置为默认
+            if self.optbinning_config is not None:
+                self.optbinning_config.set_config({})
+                
+            # 清空分箱结果展示
+            self._clear_binning_display()
+        except Exception:
+            pass
+    
+    def _clear_binning_display(self):
+        """清空分箱结果展示区域"""
+        # 清空分箱图
+        if self.bin_plot is not None:
+            self.bin_plot.clear()
+            self.split_lines.clear()
+        
+        # 清空分箱明细表
+        if self.bin_table is not None:
+            self.bin_table.clearContents()
+            self.bin_table.setRowCount(0)
+            # 重置表格高度
+            self.bin_table.setFixedHeight(100)
+        
+        # 隐藏单调性趋势指示器
+        if hasattr(self, '_trend_indicator_label'):
+            self._trend_indicator_label.hide()
+        
+        # 重置内部状态
+        self._current_metrics_df = None
+        self._current_centers = None
+        self._current_bad_rates = None
 
     def refresh_stats_and_plots(self):
         if not self.current_feature: return
@@ -259,16 +784,10 @@ class CombinedView(QWidget):
             self.target_label.setText(f"目标变量：{self.controller.state.target_col}")
         else:
             self.target_label.setText("未设置目标变量：请在数据导入页右键列名进行设置")
-        # 建议
+        # 建议（仅显示，不自动更改用户选择）
         target = self.controller.df[self.controller.state.target_col] if self.controller.state and self.controller.state.target_col else None
         rec = recommend_method(self.controller.df[self.current_feature], target)
         self.recommend_label.setText(f"分箱建议：{method_to_cn(rec)}")
-        try:
-            idx = self.method_combo.findData(rec)
-            if idx != -1:
-                self.method_combo.setCurrentIndex(idx)
-        except Exception:
-            pass
         # 分布图
         self.dist_plot.clear()
         series = self.controller.df[self.current_feature].dropna()
@@ -296,24 +815,77 @@ class CombinedView(QWidget):
             except Exception:
                 pass
 
+    def on_method_changed(self, index):
+        """分箱方法切换处理 - 动态切换配置面板"""
+        method = self.method_combo.currentData()
+        
+        if method == "optimal" and self.optbinning_config is not None:
+            self.config_stack.setCurrentIndex(1)  # 显示 Optbinning 配置面板
+            # 更新样本数参考
+            self.optbinning_config.set_n_samples(self.controller.get_sample_count())
+            # 调整容器高度以容纳展开的高级选项
+            self.config_stack.parentWidget().setMaximumHeight(16777215)  # 取消高度限制
+        else:
+            self.config_stack.setCurrentIndex(0)  # 显示传统配置面板
+            # 限制容器高度，防止传统配置面板占用太多空间
+            self.config_stack.parentWidget().setMaximumHeight(120)
+
     def run_binning(self):
-        if not self.current_feature: return
+        if not self.current_feature: 
+            return
+        
         # 以中文选项映射到内部方法键
         method_key = self.method_combo.currentData()
         method = method_key if method_key else self.method_combo.currentText()
-        supervised = method in ['decision_tree', 'chi_merge', 'best_ks']
+        
+        # 检查是否为监督学习方法且未设置目标变量
+        supervised = method in ['decision_tree', 'chi_merge', 'best_ks', 'optimal']
         if supervised and not (self.controller.state and self.controller.state.target_col):
             QMessageBox.warning(self, "提示", "未设置目标变量，当前建议为监督分箱，请先设置目标变量")
             return
-        n_bins = self.n_bins_spin.value()
-        kwargs = {'n_bins': n_bins}
-        if method in ['decision_tree', 'chi_merge']:
-            kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
-        if method == 'best_ks':
-            kwargs = {'max_bins': n_bins, 'initial_bins': 64}
-        kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
-        kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
-        self.controller.run_binning(self.current_feature, method=method, **kwargs)
+        
+        # 运行按钮 loading 状态
+        self.run_btn.setEnabled(False)
+        original_text = self.run_btn.text()
+        self.run_btn.setText("运行中...")
+        
+        try:
+            if method_key == 'optimal':
+                # 获取 Optbinning 配置
+                kwargs = self.optbinning_config.get_config()
+                
+                # 类型验证：检查类型选择是否适合数据
+                if self.optbinning_config is not None and self.current_feature:
+                    import pandas as pd
+                    feature_data = self.controller.df[self.current_feature]
+                    valid, warning_msg = self.optbinning_config.validate_dtype_for_data(feature_data)
+                    if not valid:
+                        reply = QMessageBox.question(
+                            self, "类型不匹配警告",
+                            warning_msg + "\n\n是否继续运行？",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No
+                        )
+                        if reply == QMessageBox.StandardButton.No:
+                            return
+            else:
+                # 传统配置
+                n_bins = self.n_bins_spin.value()
+                kwargs = {'n_bins': n_bins}
+                if method_key in ['decision_tree', 'chi_merge']:
+                    kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
+                if method_key == 'best_ks':
+                    kwargs = {'max_bins': n_bins, 'initial_bins': 64}
+                kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
+                kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
+            
+            # 调用控制器执行分箱
+            self.controller.run_binning(self.current_feature, method=method, **kwargs)
+        
+        finally:
+            # 恢复按钮状态（无论成功与否都恢复）
+            self.run_btn.setEnabled(True)
+            self.run_btn.setText(original_text)
 
     def on_binning_finished(self, feature: str, metrics: BinningMetrics):
         if feature != self.current_feature: return
@@ -324,6 +896,9 @@ class CombinedView(QWidget):
     def render_binning(self, metrics: BinningMetrics, cfg: BinningConfig):
         precision = resolve_precision_step(cfg.params)
         splits = cfg.splits
+        
+        # 添加单调性趋势指示器
+        self._update_trend_indicator(cfg)
         # 清理并绘制直方图+坏率折线（小图）
         self.bin_plot.clear(); self.split_lines.clear()
         data = self.controller.df[self.current_feature].dropna()
@@ -351,13 +926,20 @@ class CombinedView(QWidget):
         curve = pg.PlotCurveItem(x=centers[mask], y=np.array(bad_rates)[mask], pen=pg.mkPen('b', width=2))
         self.bin_plot.addItem(curve)
 
-        for split in splits:
+        for i, split in enumerate(splits):
             if np.isinf(split):
                 continue
             line = pg.InfiniteLine(pos=split, movable=True, angle=90, pen=pg.mkPen('r', width=2, style=Qt.PenStyle.DashLine))
             line.sigPositionChangeFinished.connect(self.on_split_dragged)
+            # 添加双击事件 - 打开输入对话框设置精确值
+            line.setCursor(Qt.CursorShape.PointingHandCursor)
+            line._split_index = i  # 保存索引用于识别
+            line._split_value = split  # 保存原始值
             self.bin_plot.addItem(line)
             self.split_lines.append(line)
+        
+        # 在 plot 上安装事件过滤器来捕获双击事件
+        self.bin_plot.viewport().installEventFilter(self)
 
         self._current_metrics_df = df
         self._current_centers = centers
@@ -419,16 +1001,198 @@ class CombinedView(QWidget):
         for j, v in enumerate(sum_values):
             self.bin_table.setItem(last_idx, j, QTableWidgetItem(v))
 
-        # 根据内容自适应最大高度（尽量显示所有行）
+        # 根据内容自适应高度，完整展示所有行
         try:
             self.bin_table.resizeRowsToContents()
             header_h = self.bin_table.horizontalHeader().height()
             rows_h = sum(self.bin_table.rowHeight(i) for i in range(self.bin_table.rowCount()))
             margins = 24
-            self.bin_table.setMaximumHeight(header_h + rows_h + margins)
+            # 使用固定高度确保完整展示
+            self.bin_table.setFixedHeight(header_h + rows_h + margins)
+            # 触发父布局更新
+            self.bin_table.updateGeometry()
+            self.bin_table.parentWidget().adjustSize()
         except Exception:
             pass
 
+    def _update_trend_indicator(self, cfg: BinningConfig):
+        """更新单调性趋势指示器"""
+        trend = cfg.params.get('monotonic_trend', 'auto') if cfg.params else 'auto'
+        
+        icon = TREND_ICONS.get(trend, '📊')
+        label = TREND_LABELS.get(trend, trend)
+        
+        if not hasattr(self, '_trend_indicator'):
+            self._trend_indicator = QLabel(self.bin_plot)
+            self._trend_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._trend_indicator.setStyleSheet("""
+                QLabel {
+                    background-color: rgba(255, 255, 255, 0.9);
+                    border: 1px solid #dee2e6;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                    font-size: 11px;
+                    color: #495057;
+                }
+            """)
+        
+        self._trend_indicator.setText(f"{icon} {label}")
+        self._trend_indicator.adjustSize()
+        
+        # 定位到右上角 (相对于 bin_plot)
+        plot_width = self.bin_plot.width()
+        indicator_width = self._trend_indicator.width()
+        self._trend_indicator.move(plot_width - indicator_width - 10, 10)
+        self._trend_indicator.raise_()  # 确保在最上层
+        self._trend_indicator.show()
+
+    def resizeEvent(self, event):
+        """窗口大小变化时重新定位指示器"""
+        super().resizeEvent(event)
+        if hasattr(self, '_trend_indicator') and self._trend_indicator.isVisible():
+            # 重新定位到右上角
+            plot_width = self.bin_plot.width()
+            indicator_width = self._trend_indicator.width()
+            self._trend_indicator.move(plot_width - indicator_width - 10, 10)
+
+    def _connect_line_double_click(self, line):
+        """为分割线连接双击事件"""
+        # 检查 scene 是否可用
+        scene = line.scene()
+        if scene is None:
+            # 如果 scene 为 None，延迟连接
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, lambda: self._connect_line_double_click(line))
+            return
+        
+        # 使用自定义属性存储是否处于双击检测状态
+        line._click_count = 0
+        line._click_timer = None
+        
+        def on_line_clicked(line=line):
+            """处理点击事件，区分单击和双击"""
+            line._click_count += 1
+            if line._click_count == 1:
+                # 第一次点击，启动定时器
+                from PyQt6.QtCore import QTimer
+                line._click_timer = QTimer()
+                line._click_timer.setSingleShot(True)
+                line._click_timer.timeout.connect(lambda: self._on_split_single_click(line))
+                line._click_timer.start(200)  # 200ms 内第二次点击视为双击
+            elif line._click_count == 2:
+                # 第二次点击，是双击
+                if line._click_timer:
+                    line._click_timer.stop()
+                    line._click_timer = None
+                line._click_count = 0
+                self._on_split_double_click(line)
+        
+        # 使用 scene 的鼠标点击事件
+        try:
+            scene.sigMouseClicked.connect(lambda evt, l=line: on_line_clicked(l) if self._is_line_clicked(l, evt) else None)
+        except Exception:
+            pass  # 忽略连接错误
+    
+    def eventFilter(self, obj, event):
+        """事件过滤器 - 处理分割线的双击事件"""
+        from PyQt6.QtCore import QEvent, QPointF
+        # 检查是否是 plot viewport 的双击事件
+        if obj == self.bin_plot.viewport() and event.type() == QEvent.Type.MouseButtonDblClick:
+            # 获取鼠标在屏幕上的位置
+            mouse_pos = event.pos()
+            
+            # 找到最近的分割线（基于屏幕像素距离）
+            closest_line = None
+            closest_pixel_dist = float('inf')
+            
+            for line in self.split_lines:
+                if not line.isVisible():
+                    continue
+                # 获取分割线在屏幕上的位置（转换为 QPointF）
+                line_val = float(line.value())  # 转换为 Python float
+                line_view_pos = QPointF(line_val, 0)
+                line_scene_pos = self.bin_plot.getViewBox().mapViewToScene(line_view_pos)
+                line_pixel_pos = self.bin_plot.mapFromScene(line_scene_pos).x()
+                
+                # 计算像素距离
+                pixel_dist = abs(mouse_pos.x() - line_pixel_pos)
+                
+                if pixel_dist < closest_pixel_dist:
+                    closest_pixel_dist = pixel_dist
+                    closest_line = line
+            
+            # 如果距离足够近（小于30像素），认为是点击了该分割线
+            if closest_line and closest_pixel_dist < 30:
+                self._on_split_double_click(closest_line)
+                return True  # 事件已处理
+        
+        return super().eventFilter(obj, event)
+    
+    def _is_line_clicked(self, line, evt):
+        """检查是否点击了指定的分割线"""
+        if not line.isVisible():
+            return False
+        # 获取鼠标位置并检查是否在线附近
+        mouse_pos = evt.scenePos()
+        line_pos = line.pos()
+        # 简单的距离检查（垂直线，检查 x 坐标）
+        return abs(mouse_pos.x() - line_pos.x()) < 10  # 10像素容错
+    
+    def _on_split_single_click(self, line):
+        """单击分割线 - 重置计数"""
+        line._click_count = 0
+    
+    def _on_split_double_click(self, line):
+        """双击分割线 - 打开输入对话框设置精确值"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QLabel
+        
+        current_value = line.value()
+        
+        # 创建对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("设置切点值")
+        dialog.setMinimumWidth(250)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+        
+        # 当前值标签
+        layout.addWidget(QLabel(f"当前值: {current_value:.4f}"))
+        
+        # 输入框
+        layout.addWidget(QLabel("新值:"))
+        input_field = QLineEdit()
+        input_field.setText(f"{current_value:.4f}")
+        input_field.selectAll()
+        layout.addWidget(input_field)
+        
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_layout.addWidget(cancel_btn)
+        
+        confirm_btn = QPushButton("确认")
+        confirm_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        confirm_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(confirm_btn)
+        
+        layout.addLayout(btn_layout)
+        
+        # 显示对话框并处理结果
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                new_value = float(input_field.text())
+                # 更新分割线位置
+                line.setValue(new_value)
+                # 触发重新计算
+                self.on_split_dragged()
+            except ValueError:
+                QMessageBox.warning(self, "输入错误", "请输入有效的数字")
+    
     def on_split_dragged(self):
         self._skip_autorange_once = True
         new_splits = []

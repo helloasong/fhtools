@@ -8,6 +8,7 @@ from src.data.repository import ProjectRepository
 from src.core.binning.unsupervised import EqualFrequencyBinner, EqualWidthBinner, ManualBinner
 from src.core.binning.supervised import DecisionTreeBinner, ChiMergeBinner
 from src.core.binning.supervised import BestKSBinner
+from src.core.binning.optbinning_adapter import OptimalBinningAdapter, OPTBINNING_AVAILABLE
 from src.core.metrics import MetricsCalculator, BinningMetrics
 from src.services.export_service import export_excel, export_python
 from src.utils.formatting import snap_value_to_precision
@@ -23,6 +24,11 @@ class ProjectController(QObject):
     project_updated = pyqtSignal(ProjectState)   # 项目状态更新
     binning_finished = pyqtSignal(str, object)   # 分箱计算完成 (feature_name, BinningMetrics)
     error_occurred = pyqtSignal(str)             # 发生错误
+    
+    # 批量分箱信号
+    batch_binning_progress = pyqtSignal(int, int, str)  # 当前进度, 总数, 当前变量名
+    batch_binning_finished = pyqtSignal(list, list)     # 成功变量列表, 失败变量列表
+    batch_binning_item_finished = pyqtSignal(str, object, bool, str)  # 变量名, 指标, 是否成功, 错误信息
 
     def __init__(self):
         super().__init__()
@@ -40,6 +46,10 @@ class ProjectController(QObject):
             'chi_merge': ChiMergeBinner,
             'best_ks': BestKSBinner
         }
+        
+        # 条件添加 Optbinning（如果已安装）
+        if OPTBINNING_AVAILABLE:
+            self.binners['optimal'] = OptimalBinningAdapter
 
     def create_new_project(self, name: str, file_path: str):
         """创建新项目并加载数据"""
@@ -209,6 +219,22 @@ class ProjectController(QObject):
             # 有监督算法需要 y，无监督不需要但传入也无妨
             if method == 'chi_merge' and 'initial_bins' not in merged_params:
                 merged_params['initial_bins'] = 64
+            
+            # Optbinning 特殊处理：处理 special_codes 字符串转列表
+            if method == 'optimal' and 'special_codes' in merged_params:
+                special_codes = merged_params['special_codes']
+                if isinstance(special_codes, str):
+                    # 将逗号分隔的字符串转为列表
+                    codes = [c.strip() for c in special_codes.split(',') if c.strip()]
+                    # 尝试转为数值
+                    parsed_codes = []
+                    for c in codes:
+                        try:
+                            parsed_codes.append(float(c))
+                        except ValueError:
+                            parsed_codes.append(c)
+                    merged_params['special_codes'] = parsed_codes if parsed_codes else None
+            
             binner.fit(x, y, **merged_params)
             splits = binner.splits
 
@@ -299,3 +325,36 @@ class ProjectController(QObject):
         path = self.repository.save_snapshot(self.state)
         self.dirty = False
         return path
+
+    def get_sample_count(self) -> int:
+        """获取当前数据样本数"""
+        if self.df is not None:
+            return len(self.df)
+        return 0
+
+    def run_batch_binning(self, features: List[str], method: str = 'optimal', **kwargs):
+        """
+        批量分箱
+        
+        Args:
+            features: 特征列表
+            method: 分箱方法
+            **kwargs: 分箱参数
+        """
+        success_features = []
+        failed_features = []
+        
+        for i, feature in enumerate(features):
+            self.batch_binning_progress.emit(i + 1, len(features), feature)
+            
+            try:
+                self.run_binning(feature, method=method, **kwargs)
+                metrics = self.state.binning_results.get(feature)
+                success_features.append(feature)
+                self.batch_binning_item_finished.emit(feature, metrics, True, "")
+            except Exception as e:
+                failed_features.append((feature, str(e)))
+                self.batch_binning_item_finished.emit(feature, None, False, str(e))
+                self.error_occurred.emit(f"{feature} 分箱失败: {str(e)}")
+        
+        self.batch_binning_finished.emit(success_features, failed_features)

@@ -60,6 +60,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Risk Control Binning Tool (Trae Edition)")
         self.resize(1200, 800)
+        # 设置最小窗口尺寸，允许用户自由调整但不能太小
+        self.setMinimumSize(1000, 600)
         
         # 初始化控制器
         self.controller = ProjectController()

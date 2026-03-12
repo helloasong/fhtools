@@ -5,6 +5,9 @@ numpy>=1.24.0
 scikit-learn>=1.2.0
 scipy>=1.10.0
 
+# Optimal Binning (本次新增)
+optbinning>=0.21.0
+
 # GUI Framework
 PyQt6>=6.4.0
 qt-material>=2.14

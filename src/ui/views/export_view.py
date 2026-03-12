@@ -3,6 +3,8 @@ from PyQt6.QtWidgets import (
     QFileDialog, QProgressBar, QMessageBox
 )
 from PyQt6.QtCore import Qt
+from datetime import datetime
+import os
 
 from src.controllers.project_controller import ProjectController
 from src.utils.workers import Worker
@@ -35,12 +37,15 @@ class ExportView(QWidget):
         self.export_excel_btn = QPushButton("Export Excel Report")
         self.export_py_btn = QPushButton("Export Python Rules")
         self.export_sql_btn = QPushButton("Export SQL Rules")
+        self.export_config_btn = QPushButton("Export Optbinning Config (JSON)")
         self.export_excel_btn.clicked.connect(self.export_excel)
         self.export_py_btn.clicked.connect(self.export_python)
         self.export_sql_btn.clicked.connect(self.export_sql)
+        self.export_config_btn.clicked.connect(self.export_optbinning_config)
         btn_row.addWidget(self.export_excel_btn)
         btn_row.addWidget(self.export_py_btn)
         btn_row.addWidget(self.export_sql_btn)
+        btn_row.addWidget(self.export_config_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -99,3 +104,35 @@ class ExportView(QWidget):
 
     def export_sql(self):
         self._start_worker(self.controller.export_sql_rules, self.dir_input.text(), success_msg="SQL rules exported.")
+
+    def export_optbinning_config(self):
+        """导出 Optbinning JSON 配置"""
+        if not self.dir_input.text().strip():
+            QMessageBox.warning(self, "Warning", "Please select export directory.")
+            return
+        
+        # 检查是否有分箱结果
+        if not hasattr(self.controller, 'state') or not self.controller.state:
+            QMessageBox.warning(self, "Warning", "No project state available.")
+            return
+        
+        if not self.controller.state.binning_results:
+            QMessageBox.warning(self, "Warning", "No binning results to export.")
+            return
+        
+        from src.services.export_optbinning_config import export_optbinning_config
+        
+        try:
+            output_path = os.path.join(
+                self.dir_input.text(),
+                f"optbinning_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            
+            export_optbinning_config(self.controller.state, output_path)
+            
+            QMessageBox.information(
+                self, "Success",
+                f"Optbinning config exported.\n\nSaved to: {output_path}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to export config: {str(e)}")
