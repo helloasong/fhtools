@@ -12,13 +12,12 @@ from typing import List, Optional, Dict, Tuple
 from .base import BaseBinner
 
 
-class SmartMonotonicBinner(BaseBinner):
+class SmartMonotonicBinnerV3(BaseBinner):
     """智能单调分箱器 v3.0 - 实用版"""
     
     DEFAULT_MAX_BINS = 10
     DEFAULT_MIN_BINS = 3
     DEFAULT_MIN_SAMPLES_PER_BIN = 50
-    DEFAULT_MONOTONIC_TREND = 'auto'
     N_PREBINS = 50  # 预分箱数
     
     def __init__(self):
@@ -28,10 +27,10 @@ class SmartMonotonicBinner(BaseBinner):
         self._adjustment_info = []
         self._final_iv = 0.0
         
-    def fit(self, x: pd.Series, y: Optional[pd.Series] = None, **kwargs) -> 'SmartMonotonicBinner':
+    def fit(self, x: pd.Series, y: Optional[pd.Series] = None, **kwargs) -> 'SmartMonotonicBinnerV3':
         """拟合分箱"""
         if y is None:
-            raise ValueError("SmartMonotonicBinner requires target variable 'y'.")
+            raise ValueError("需要目标变量y")
         
         max_bins = kwargs.get('max_bins', self.DEFAULT_MAX_BINS)
         min_bins = kwargs.get('min_bins', self.DEFAULT_MIN_BINS)
@@ -47,7 +46,7 @@ class SmartMonotonicBinner(BaseBinner):
         n = len(data)
         
         if n < 100:
-            raise ValueError(f"样本数不足: {n}")
+            raise ValueError(f"样本不足: {n}")
         
         # 确定趋势
         if trend == 'auto':
@@ -246,7 +245,7 @@ class SmartMonotonicBinner(BaseBinner):
         splits.append(np.inf)
         return splits
     
-    def _fallback(self, x: np.ndarray, min_bins: int) -> 'SmartMonotonicBinner':
+    def _fallback(self, x: np.ndarray, min_bins: int) -> 'SmartMonotonicBinnerV3':
         """保底"""
         self._log("保底分箱")
         n = len(x)
@@ -273,14 +272,6 @@ class SmartMonotonicBinner(BaseBinner):
     @property
     def splits(self) -> List[float]:
         return self._splits
-    
-    @property
-    def adjustment_info(self) -> List[str]:
-        return self._adjustment_info
-    
-    @property
-    def adjustment_method(self) -> Optional[str]:
-        return self._adjustment_method
     
     def _log(self, msg: str):
         self._adjustment_info.append(msg)
