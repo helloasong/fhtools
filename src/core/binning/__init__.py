@@ -5,6 +5,7 @@
 from .base import BaseBinner
 from .unsupervised import EqualFrequencyBinner, EqualWidthBinner, ManualBinner
 from .supervised import DecisionTreeBinner, ChiMergeBinner, BestKSBinner
+from .smart_monotonic import SmartMonotonicBinner
 
 # 可选依赖：optbinning
 from .optbinning_adapter import (
@@ -24,6 +25,8 @@ __all__ = [
     'DecisionTreeBinner',
     'ChiMergeBinner',
     'BestKSBinner',
+    # 智能单调分箱
+    'SmartMonotonicBinner',
     # 可选依赖
     'OptimalBinningAdapter',
     'OPTBINNING_AVAILABLE',

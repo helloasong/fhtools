@@ -470,6 +470,7 @@ class CombinedView(QWidget):
             method_map.append(("───────────────", "separator"))
         
         method_map.extend([
+            ("智能单调分箱", "smart_monotonic"),  # 新增：自动追求单调，100%有解
             ("等频分箱", "equal_freq"),
             ("等距分箱", "equal_width"),
             ("决策树分箱", "decision_tree"),
@@ -560,7 +561,7 @@ class CombinedView(QWidget):
         
         # 检查目标变量
         method_key = self.method_combo.currentData()
-        supervised_methods = ['decision_tree', 'chi_merge', 'best_ks', 'optimal']
+        supervised_methods = ['decision_tree', 'chi_merge', 'best_ks', 'optimal', 'smart_monotonic']
         
         if method_key in supervised_methods and not self.controller.state.target_col:
             QMessageBox.warning(self, "提示", "未设置目标变量，请先设置目标变量")
@@ -594,6 +595,15 @@ class CombinedView(QWidget):
                 kwargs = {'max_leaf_nodes': n_bins, 'max_bins': n_bins}
             if method_key == 'best_ks':
                 kwargs = {'max_bins': n_bins, 'initial_bins': 64}
+            if method_key == 'smart_monotonic':
+                # 智能单调分箱参数
+                kwargs = {
+                    'max_bins': n_bins,
+                    'min_bins': 2,
+                    'monotonic_trend': 'auto',  # 自动选择递增或递减
+                    'adjustment_method': 'auto',  # 自动选择调整方式
+                    'iv_tolerance': 0.1,  # 允许10% IV损失
+                }
             kwargs['boundary_precision_mode'] = self.precision_mode_combo.currentData()
             kwargs['boundary_precision_digits'] = int(self.precision_digits_spin.value())
         
@@ -986,7 +996,7 @@ class CombinedView(QWidget):
         method = method_key if method_key else self.method_combo.currentText()
         
         # 检查是否为监督学习方法且未设置目标变量
-        supervised = method in ['decision_tree', 'chi_merge', 'best_ks', 'optimal']
+        supervised = method in ['decision_tree', 'chi_merge', 'best_ks', 'optimal', 'smart_monotonic']
         if supervised and not (self.controller.state and self.controller.state.target_col):
             QMessageBox.warning(self, "提示", "未设置目标变量，当前建议为监督分箱，请先设置目标变量")
             return

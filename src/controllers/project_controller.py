@@ -8,6 +8,7 @@ from src.data.repository import ProjectRepository
 from src.core.binning.unsupervised import EqualFrequencyBinner, EqualWidthBinner, ManualBinner
 from src.core.binning.supervised import DecisionTreeBinner, ChiMergeBinner
 from src.core.binning.supervised import BestKSBinner
+from src.core.binning.smart_monotonic import SmartMonotonicBinner
 from src.core.binning.optbinning_adapter import OptimalBinningAdapter, OPTBINNING_AVAILABLE, InfeasibleBinningError
 from src.core.metrics import MetricsCalculator, BinningMetrics
 from src.services.export_service import export_excel, export_python
@@ -44,7 +45,8 @@ class ProjectController(QObject):
             'manual': ManualBinner,
             'decision_tree': DecisionTreeBinner,
             'chi_merge': ChiMergeBinner,
-            'best_ks': BestKSBinner
+            'best_ks': BestKSBinner,
+            'smart_monotonic': SmartMonotonicBinner,  # 智能单调分箱
         }
         
         # 条件添加 Optbinning（如果已安装）
