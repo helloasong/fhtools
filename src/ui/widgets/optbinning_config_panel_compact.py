@@ -34,6 +34,7 @@ DIVERGENCE_OPTIONS = [
 ]
 
 MONOTONIC_TREND_OPTIONS = [
+    ('auto_asc_desc', '自动(增或减)'),  # 默认：自动选择递增或递减
     ('auto', '自动'),
     ('ascending', '递增'),
     ('descending', '递减'),
@@ -124,8 +125,8 @@ class OptbinningConfigPanel(QWidget):
         self.monotonic_combo = QComboBox()
         for value, label in MONOTONIC_TREND_OPTIONS:
             self.monotonic_combo.addItem(label, value)
-        self.monotonic_combo.setCurrentIndex(0)
-        self.monotonic_combo.setMinimumWidth(70)
+        self.monotonic_combo.setCurrentIndex(0)  # 默认 auto_asc_desc
+        self.monotonic_combo.setMinimumWidth(90)
         row2.addWidget(self.monotonic_combo)
         
         row2.addSpacing(16)

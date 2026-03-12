@@ -52,14 +52,14 @@ class OptimalBinningAdapter(BaseBinner):
         >>> print(adapter.status)
     """
     
-    # 默认参数值
+    # 默认参数值 - 追求尽可能有解的配置
     DEFAULT_SOLVER = 'cp'
     DEFAULT_DIVERGENCE = 'iv'
-    DEFAULT_MONOTONIC_TREND = 'auto'
+    DEFAULT_MONOTONIC_TREND = 'auto_asc_desc'  # 自动选择递增或递减，提高成功率
     DEFAULT_MAX_N_BINS = 10
     DEFAULT_MIN_N_BINS = 2
-    DEFAULT_MAX_N_PREBINS = 20
-    DEFAULT_MIN_PREBIN_SIZE = 0.05
+    DEFAULT_MAX_N_PREBINS = 50       # 增加预分箱数，给求解器更多选择
+    DEFAULT_MIN_PREBIN_SIZE = 0.005  # 降低最小占比到0.5%，允许更小的预分箱
     DEFAULT_TIME_LIMIT = 100
     
     def __init__(self):
@@ -112,7 +112,7 @@ class OptimalBinningAdapter(BaseBinner):
             'dtype': dtype,
             'cat_cutoff': kwargs.get('cat_cutoff', None),
             # 新增参数
-            'prebinning_method': kwargs.get('prebinning_method', 'cart'),
+            'prebinning_method': kwargs.get('prebinning_method', 'quantile'),  # 默认等频，保证每预分箱有足够样本
             'min_bin_size': kwargs.get('min_bin_size', None),
             'max_bin_size': kwargs.get('max_bin_size', None),
             'min_bin_n_event': kwargs.get('min_bin_n_event', None),

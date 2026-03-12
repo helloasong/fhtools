@@ -16,22 +16,22 @@ class AdvancedParamsPanel(QWidget):
     
     params_changed = pyqtSignal()
     
-    # 默认值
+    # 默认值 - 追求尽可能有解的配置
     DEFAULTS = {
-        'max_n_prebins': 20,
-        'min_prebin_size': 0.05,
-        'prebinning_method': 'cart',
-        'min_bin_size': None,
-        'max_bin_size': None,
-        'min_bin_n_event': None,
-        'max_bin_n_event': None,
-        'min_bin_n_nonevent': None,
-        'max_bin_n_nonevent': None,
-        'min_event_rate_diff': 0.0,
-        'max_pvalue': None,
+        'max_n_prebins': 50,        # 增加预分箱数，给求解器更多选择
+        'min_prebin_size': 0.005,   # 降低最小占比到0.5%，允许更小的预分箱
+        'prebinning_method': 'quantile',  # 等频分箱，保证每预分箱有足够样本
+        'min_bin_size': None,       # 不限制最小箱占比
+        'max_bin_size': None,       # 不限制最大箱占比
+        'min_bin_n_event': None,    # 不限制最少坏样本
+        'max_bin_n_event': None,    # 不限制最多坏样本
+        'min_bin_n_nonevent': None, # 不限制最少好样本
+        'max_bin_n_nonevent': None, # 不限制最多好样本
+        'min_event_rate_diff': 0.0, # 不限制事件率差异
+        'max_pvalue': None,         # 关闭p值检验
         'max_pvalue_policy': 'consecutive',
-        'split_digits': None,
-        'gamma': 0.0,
+        'split_digits': None,       # 不限制切点精度
+        'gamma': 0.0,               # 无正则化
     }
     
     def __init__(self, parent=None):
@@ -90,28 +90,28 @@ class AdvancedParamsPanel(QWidget):
         prebin_grid.setColumnStretch(1, 1)
         prebin_grid.setColumnStretch(3, 1)
         
-        # 预分箱方法
+        # 预分箱方法 - 默认等频，保证每预分箱有足够样本
         prebin_grid.addWidget(QLabel("预分箱方法:"), 0, 0)
         self.prebin_method_combo = QComboBox()
-        for val, label in [('cart', 'CART(决策树)'), ('quantile', '等频'), ('uniform', '等距')]:
+        for val, label in [('quantile', '等频'), ('cart', 'CART(决策树)'), ('uniform', '等距')]:
             self.prebin_method_combo.addItem(label, val)
         self.prebin_method_combo.setFixedWidth(110)
         prebin_grid.addWidget(self.prebin_method_combo, 0, 1)
         
-        # 预分箱数
+        # 预分箱数 - 增加默认值到50，给求解器更多选择
         prebin_grid.addWidget(QLabel("预分箱数:"), 0, 2)
         self.max_n_prebins_spin = QSpinBox()
         self.max_n_prebins_spin.setRange(5, 200)
-        self.max_n_prebins_spin.setValue(20)
+        self.max_n_prebins_spin.setValue(50)
         self.max_n_prebins_spin.setFixedWidth(70)
         prebin_grid.addWidget(self.max_n_prebins_spin, 0, 3)
         
-        # 预分箱最小占比
+        # 预分箱最小占比 - 降低默认值到0.005(0.5%)，允许更小的预分箱
         prebin_grid.addWidget(QLabel("最小占比:"), 1, 0)
         self.min_prebin_size_spin = QDoubleSpinBox()
-        self.min_prebin_size_spin.setRange(0.01, 0.5)
-        self.min_prebin_size_spin.setValue(0.05)
-        self.min_prebin_size_spin.setDecimals(2)
+        self.min_prebin_size_spin.setRange(0.001, 0.5)
+        self.min_prebin_size_spin.setValue(0.005)
+        self.min_prebin_size_spin.setDecimals(3)
         self.min_prebin_size_spin.setFixedWidth(70)
         prebin_grid.addWidget(self.min_prebin_size_spin, 1, 1)
         

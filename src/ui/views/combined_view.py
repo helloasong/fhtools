@@ -36,6 +36,7 @@ TREND_ICONS = {
 
 TREND_LABELS = {
     'auto': '自动',
+    'auto_asc_desc': '自动(增或减)',
     'ascending': '递增',
     'descending': '递减',
     'concave': '凹形',
