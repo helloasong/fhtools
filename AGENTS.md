@@ -178,10 +178,33 @@ All algorithms are in `src/core/binning/`:
 - 自动化追求单调性，无需人工调整参数
 - 多层降级策略，保证100%有解（即使退化为2箱）
 - IV损失可控，优先保留更高箱数
+- 支持多种调整方法：merge（合并）、pava（平滑）、none（仅检查）
+
+**参数列表**:
+
+| 参数 | 类型 | 默认值 | 说明 |
+|-----|------|-------|------|
+| `max_bins` | int | 10 | 最大箱数（UI上"箱数"控制） |
+| `min_bins` | int | 2 | 最小箱数 |
+| `monotonic_trend` | str | 'auto' | 单调趋势：'auto'/'ascending'/'descending' |
+| `adjustment_method` | str | 'auto' | 调整方法：'auto'/'merge'/'pava'/'none' |
+| `iv_tolerance` | float | 0.1 | IV损失容忍度（0-1），默认10% |
+| `min_samples_per_bin` | int | 50 | 每箱最小样本数 |
+
+**调整方法说明**:
+
+| 方法 | 描述 | 适用场景 |
+|-----|------|---------|
+| `auto` | 智能选择：优先merge，IV损失大则用pava | **推荐默认** |
+| `merge` | 合并相邻违反单调性的箱 | 箱数可能减少，IV损失可控 |
+| `pava` | PAVA平滑算法，保持箱数不变 | 需要保持箱数时使用 |
+| `none` | 仅检查单调性，不调整 | 用于分析原始结果 |
 
 **算法策略**（按优先级）:
 1. **决策树分箱**: 使用CART生成初始切分，追求IV最大化
-2. **强制单调合并**: 贪婪合并违反单调性的相邻箱，优先保留更多箱数
+2. **调整方法选择**:
+   - `merge`: 贪婪合并违反单调性的相邻箱
+   - `pava`: 平滑bad rate使其单调，保持边界不变
 3. **保底2分箱**: 中位数切分，确保100%有解
 
 **关键修复记录** (2026-03-12):
@@ -203,12 +226,19 @@ All algorithms are in `src/core/binning/`:
 from src.core.binning.smart_monotonic import SmartMonotonicBinner
 
 binner = SmartMonotonicBinner()
-binner.fit(x, y, max_bins=5, min_bins=2, monotonic_trend='auto')
+binner.fit(x, y, 
+    max_bins=8,
+    monotonic_trend='ascending',  # 强制递增
+    adjustment_method='pava',     # 使用PAVA平滑
+    iv_tolerance=0.05             # 只接受5% IV损失
+)
 
 print(f"分箱边界: {binner.splits}")
 print(f"实际箱数: {len(binner.splits)-1}")
-print(f"调整方法: {binner.adjustment_method}")  # 'none', 'forced_merge', 'fallback'
+print(f"是否单调: {binner.is_monotonic}")
+print(f"调整方法: {binner.adjustment_method}")  # 'none', 'merge', 'pava', 'fallback'
 print(f"IV损失: {binner.iv_loss:.1%}")
+print(f"调整信息: {binner.adjustment_info}")
 ```
 
 ### Algorithm Interface
