@@ -3,7 +3,10 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from src.data.models import ProjectState, VariableStats, BinningConfig
+from src.data.models import (
+    ProjectState, VariableStats, BinningConfig,
+    FilterMode, FilterRule, FeatureFilterSetting,
+)
 from src.data.repository import ProjectRepository
 from src.core.binning.unsupervised import EqualFrequencyBinner, EqualWidthBinner, ManualBinner
 from src.core.binning.supervised import DecisionTreeBinner, ChiMergeBinner
@@ -11,6 +14,8 @@ from src.core.binning.supervised import BestKSBinner
 from src.core.binning.smart_monotonic import SmartMonotonicBinner
 from src.core.binning.optbinning_adapter import OptimalBinningAdapter, OPTBINNING_AVAILABLE, InfeasibleBinningError
 from src.core.metrics import MetricsCalculator, BinningMetrics
+from src.core.filtering.engine import FilterEngine
+from src.core.filtering.validation import FilterValidator
 from src.services.export_service import export_excel, export_python
 from src.utils.formatting import snap_value_to_precision
 
@@ -185,10 +190,122 @@ class ProjectController(QObject):
             )
             self.state.variable_stats[col] = stats
 
+    # ===== 数据过滤规则 =====
+
+    def get_effective_filter_rule(self, feature: str) -> Optional[FilterRule]:
+        """获取指定指标生效的过滤规则
+
+        根据指标级设置和全局规则，返回最终生效的 FilterRule。
+
+        Args:
+            feature: 指标名称
+
+        Returns:
+            生效的过滤规则，如果无过滤则返回 None
+        """
+        if not self.state:
+            return None
+
+        # 获取指标设置
+        setting = self.state.feature_filter_settings.get(feature)
+
+        if setting:
+            if setting.mode == FilterMode.DISABLED:
+                return None
+            elif setting.mode == FilterMode.CUSTOM:
+                return setting.rule if (setting.rule and setting.rule.enabled) else None
+            # mode == GLOBAL，继续走全局逻辑
+
+        # 使用全局规则
+        if self.state.global_filter_rule and self.state.global_filter_rule.enabled:
+            return self.state.global_filter_rule
+
+        return None
+
+    def get_filtered_data_for_feature(self, feature: str) -> pd.DataFrame:
+        """获取指定指标过滤后的数据子集
+
+        Args:
+            feature: 指标名称
+
+        Returns:
+            过滤后的 DataFrame（未过滤则返回原 df 的 copy）
+        """
+        if self.df is None:
+            raise ValueError("数据未加载")
+
+        rule = self.get_effective_filter_rule(feature)
+        return FilterEngine.apply(self.df, rule)
+
+    def get_filter_preview(self, rule: Optional[FilterRule]) -> dict:
+        """获取过滤规则的预览统计信息
+
+        Args:
+            rule: 过滤规则
+
+        Returns:
+            预览结果字典
+        """
+        if self.df is None:
+            return {
+                'total_samples': 0,
+                'filtered_samples': 0,
+                'removed_samples': 0,
+                'removal_ratio': 0.0,
+            }
+
+        result = FilterEngine.preview(self.df, rule)
+        return {
+            'total_samples': result.total_samples,
+            'filtered_samples': result.filtered_samples,
+            'removed_samples': result.removed_samples,
+            'removal_ratio': result.removal_ratio,
+        }
+
+    def validate_filter_rule(self, rule: FilterRule) -> List[str]:
+        """校验过滤规则
+
+        Args:
+            rule: 待校验的规则
+
+        Returns:
+            错误信息列表，空列表表示校验通过
+        """
+        return FilterValidator.validate(rule, self.df)
+
+    def save_global_filter_rule(self, rule: Optional[FilterRule]) -> None:
+        """保存全局过滤规则
+
+        Args:
+            rule: 全局规则，None 表示清除全局规则
+        """
+        if not self.state:
+            self.error_occurred.emit("项目未加载")
+            return
+
+        self.state.global_filter_rule = rule
+        self.dirty = True
+        self.project_updated.emit(self.state)
+
+    def save_feature_filter_setting(self, feature: str, setting: FeatureFilterSetting) -> None:
+        """保存指标的过滤设置
+
+        Args:
+            feature: 指标名称
+            setting: 过滤设置
+        """
+        if not self.state:
+            self.error_occurred.emit("项目未加载")
+            return
+
+        self.state.feature_filter_settings[feature] = setting
+        self.dirty = True
+        self.project_updated.emit(self.state)
+
     def run_binning(self, feature: str, method: str = 'equal_freq', emit_error: bool = True, **kwargs):
         """
         对指定特征执行分箱计算。
-        
+
         Args:
             feature: 特征列名
             method: 分箱方法
@@ -201,8 +318,16 @@ class ProjectController(QObject):
             return
 
         try:
-            x = self.df[feature]
-            y = self.df[self.state.target_col]
+            # === [新增] 应用过滤规则 ===
+            filtered_df = self.get_filtered_data_for_feature(feature)
+
+            if filtered_df.empty:
+                if emit_error:
+                    self.error_occurred.emit(f"指标 '{feature}' 过滤后数据为空，无法进行分箱。请检查过滤规则设置。")
+                return
+
+            x = filtered_df[feature]
+            y = filtered_df[self.state.target_col]
 
             existing_cfg = self.state.binning_configs.get(feature)
             merged_params = dict((existing_cfg.params if existing_cfg else {}) or {})

@@ -1,10 +1,66 @@
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 
-from src.data.models import ProjectState
+from src.data.models import (
+    ProjectState, FilterRule, FilterCondition, FilterLogicNode,
+    FilterMode, FeatureFilterSetting,
+)
 from src.utils.formatting import format_bin_label, resolve_precision_step
+
+
+def _format_filter_rule(state: ProjectState, feature: str) -> Optional[str]:
+    """格式化特征的过滤规则为可读文本
+
+    Returns:
+        过滤规则说明文本，无过滤时返回 None
+    """
+    setting = state.feature_filter_settings.get(feature)
+    global_rule = state.global_filter_rule
+
+    # 确定生效的规则
+    effective_rule = None
+    rule_source = None
+
+    if setting:
+        if setting.mode == FilterMode.DISABLED:
+            return "过滤规则: 不应用任何过滤（使用全部样本）"
+        elif setting.mode == FilterMode.CUSTOM:
+            effective_rule = setting.rule
+            rule_source = "自定义过滤规则"
+        elif setting.mode == FilterMode.GLOBAL:
+            effective_rule = global_rule
+            rule_source = "全局过滤规则"
+    else:
+        # 未配置时使用全局规则
+        effective_rule = global_rule
+        rule_source = "全局过滤规则"
+
+    if not effective_rule or not effective_rule.enabled or not effective_rule.root:
+        return None
+
+    def _format_node(node, indent: str = "") -> str:
+        if isinstance(node, FilterCondition):
+            prefix = "NOT " if node.negate else ""
+            if node.operator in ('is null', 'is not null'):
+                return f"{indent}{prefix}{node.variable} {node.operator}"
+            if node.operator == 'between' and isinstance(node.value, (list, tuple)) and len(node.value) == 2:
+                return f"{indent}{prefix}{node.variable} {node.operator} [{node.value[0]}, {node.value[1]}]"
+            if isinstance(node.value, list):
+                values = ', '.join(str(v) for v in node.value)
+                return f"{indent}{prefix}{node.variable} {node.operator} [{values}]"
+            return f"{indent}{prefix}{node.variable} {node.operator} {node.value}"
+
+        elif isinstance(node, FilterLogicNode):
+            lines = [f"{indent}[{node.operator}]"]
+            for child in node.children:
+                lines.append(_format_node(child, indent + "  "))
+            return '\n'.join(lines)
+        return ""
+
+    rule_text = _format_node(effective_rule.root)
+    return f"过滤规则 ({rule_source}):\n{rule_text}"
 
 
 def _build_summary_df(state: ProjectState) -> pd.DataFrame:
@@ -14,6 +70,9 @@ def _build_summary_df(state: ProjectState) -> pd.DataFrame:
         precision = (resolve_precision_step(cfg.params) if cfg else "auto")
         df = metrics.summary_table.reset_index().copy()
         df["feature"] = feature
+        # 添加过滤规则列
+        filter_text = _format_filter_rule(state, feature)
+        df["过滤规则"] = filter_text.replace('\n', ' | ') if filter_text else "无"
         # 追加每特征的合计行
         try:
             total = int(df['total'].sum())
@@ -32,7 +91,8 @@ def _build_summary_df(state: ProjectState) -> pd.DataFrame:
                 'bad_dist': np.nan,
                 'woe': '',
                 'iv': '',
-                'lift': ''
+                'lift': '',
+                '过滤规则': filter_text.replace('\n', ' | ') if filter_text else "无"
             }
             # 保持列顺序并避免分类类型冲突
             df = pd.concat([df, pd.DataFrame([total_row])[df.columns]], ignore_index=True)
@@ -43,7 +103,7 @@ def _build_summary_df(state: ProjectState) -> pd.DataFrame:
         # 统一列顺序（若列存在）
         cols = [c for c in [
             "feature", "bin", "total", "total_pct", "bad", "bad_rate",
-            "good", "good_dist", "bad_dist", "woe", "iv", "lift"
+            "good", "good_dist", "bad_dist", "woe", "iv", "lift", "过滤规则"
         ] if c in df.columns]
         df = df[cols]
         rows.append(df)
@@ -94,6 +154,38 @@ def export_excel(state: ProjectState, output_dir: str) -> str:
             if 'bin' in df.columns:
                 df['bin'] = df['bin'].apply(lambda b: format_bin_label(b, precision=precision))
             df.to_excel(writer, index=False, sheet_name=str(feature)[:31])
+
+    # 使用 openpyxl 为每个 sheet 添加过滤规则注释和可见说明
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.comments import Comment
+        from openpyxl.styles import Font, Alignment, PatternFill
+
+        wb = load_workbook(out_path)
+        for feature in state.binning_results:
+            rule_text = _format_filter_rule(state, feature)
+            if rule_text:
+                sheet_name = str(feature)[:31]
+                if sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    # 在 A1 单元格添加注释
+                    ws['A1'].comment = Comment(rule_text, "FHBinningTool")
+                    # 在表头下方插入一行可见的过滤条件说明
+                    ws.insert_rows(2)
+                    cell = ws.cell(row=2, column=1)
+                    cell.value = rule_text.replace('\n', ' | ')
+                    cell.font = Font(color="666666", italic=True, size=10)
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                    # 合并该行所有列
+                    max_col = ws.max_column
+                    if max_col > 1:
+                        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max_col)
+        wb.save(out_path)
+        wb.close()
+    except Exception:
+        # 注释添加失败不影响主导出功能
+        pass
+
     return out_path
 
 

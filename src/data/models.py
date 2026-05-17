@@ -1,8 +1,84 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from datetime import datetime
+from enum import Enum
 import pandas as pd
 from src.core.metrics import BinningMetrics
+
+
+class FilterMode(str, Enum):
+    """指标过滤模式"""
+    GLOBAL = "global"
+    CUSTOM = "custom"
+    DISABLED = "disabled"
+
+
+@dataclass
+class FilterCondition:
+    """原子条件节点 (叶子节点)
+
+    表示一个最基本的判断，如 `age > 18`
+
+    Attributes:
+        variable: 变量名（数据集中的列名）
+        operator: 操作符
+        value: 比较值，类型取决于 operator
+        negate: 是否取反 (NOT)
+    """
+    variable: str
+    operator: str
+    value: Optional[Union[str, float, int, List]] = None
+    negate: bool = False
+
+
+@dataclass
+class FilterLogicNode:
+    """逻辑组合节点 (分支节点)
+
+    表示 AND/OR 逻辑组合，可嵌套任意深度。
+
+    Attributes:
+        operator: 'AND' 或 'OR'
+        children: 子节点列表，元素可以是 FilterCondition 或 FilterLogicNode
+    """
+    operator: str = "AND"
+    children: List[Union['FilterLogicNode', FilterCondition]] = field(default_factory=list)
+
+
+FilterNode = Union[FilterLogicNode, FilterCondition]
+
+
+@dataclass
+class FilterRule:
+    """完整的过滤规则
+
+    Attributes:
+        name: 规则名称，用于展示
+        enabled: 是否启用（禁用后等效于不存在）
+        root: 规则树根节点
+        created_at: 创建时间 ISO 字符串
+        updated_at: 更新时间 ISO 字符串
+    """
+    name: Optional[str] = None
+    enabled: bool = True
+    root: Optional[FilterNode] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@dataclass
+class FeatureFilterSetting:
+    """单个指标的过滤设置
+
+    每个指标在 ProjectState 中对应一个此对象，
+    明确记录该指标使用全局规则、自定义规则、还是不过滤。
+
+    Attributes:
+        mode: 过滤模式
+        rule: 自定义规则（仅在 mode=CUSTOM 时有效）
+    """
+    mode: FilterMode = FilterMode.GLOBAL
+    rule: Optional[FilterRule] = None
 
 @dataclass
 class BinningConfig:
@@ -57,6 +133,10 @@ class ProjectState:
     # 分箱结果缓存 {feature_name: (config, result_metrics)}
     binning_configs: Dict[str, BinningConfig] = field(default_factory=dict)
     binning_results: Dict[str, BinningMetrics] = field(default_factory=dict)
+
+    # [新增] 数据过滤规则
+    global_filter_rule: Optional[FilterRule] = None
+    feature_filter_settings: Dict[str, FeatureFilterSetting] = field(default_factory=dict)
 
     def update_timestamp(self):
         self.last_modified = datetime.now()

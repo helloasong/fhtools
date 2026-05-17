@@ -1,8 +1,10 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QLabel, QFileDialog, QLineEdit, QProgressBar, QMessageBox, QTableView, QMenu, QDialog, QFormLayout, QComboBox
 )
 from src.controllers.project_controller import ProjectController
+from src.ui.dialogs.filter_rule_dialog import FilterRuleDialog
+from src.data.models import FeatureFilterSetting, FilterMode, FilterRule
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
 import pandas as pd
 from src.utils.workers import Worker
@@ -68,6 +70,33 @@ class ImportView(QWidget):
         layout.addWidget(self.file_info)
         layout.addWidget(self.table_preview)
 
+        # 4. 全局过滤规则配置
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(8)
+
+        self.lbl_global_filter = QLabel("🌐 全局过滤规则: 未配置")
+        self.lbl_global_filter.setStyleSheet("color: #666; font-size: 12px; padding: 4px;")
+        filter_layout.addWidget(self.lbl_global_filter)
+
+        self.btn_config_filter = QPushButton("配置全局过滤规则")
+        self.btn_config_filter.setStyleSheet("""
+            QPushButton {
+                background: linear-gradient(to bottom, #E8EEF6, #D9E4F5);
+                border: 1px solid #C9D6EA;
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: linear-gradient(to bottom, #D9E4F5, #C9D6EA);
+            }
+        """)
+        self.btn_config_filter.clicked.connect(self._open_global_filter_dialog)
+        filter_layout.addWidget(self.btn_config_filter)
+        filter_layout.addStretch()
+
+        layout.addLayout(filter_layout)
+
     def setup_connections(self):
         # 连接控制器的信号
         self.controller.data_loaded.connect(self.on_data_loaded)
@@ -128,6 +157,54 @@ class ImportView(QWidget):
         if self.controller.df is None:
             return ""
         return f"文件：{self.controller.state.raw_data_path} | 维度：{self.controller.df.shape}"
+
+    def _open_global_filter_dialog(self):
+        """打开全局规则编辑对话框"""
+        if not self.controller.state:
+            QMessageBox.warning(self, "提示", "请先创建项目并导入数据")
+            return
+
+        # 获取所有列名
+        all_cols = list(self.controller.df.columns) if self.controller.df is not None else []
+        # 推断列类型
+        col_types = {}
+        if self.controller.df is not None:
+            for col in all_cols:
+                dtype = str(self.controller.df[col].dtype)
+                if 'int' in dtype or 'float' in dtype:
+                    col_types[col] = 'numeric'
+                else:
+                    col_types[col] = 'string'
+
+        dialog = FilterRuleDialog(
+            df=self.controller.df,
+            columns=all_cols,
+            column_types=col_types,
+            setting=None,
+            global_rule=self.controller.state.global_filter_rule if self.controller.state else None,
+            feature_name=None,
+            parent=self
+        )
+        dialog.rule_saved.connect(self._on_global_filter_saved)
+        dialog.exec()
+
+    def _on_global_filter_saved(self, result):
+        """全局规则保存回调
+
+        Args:
+            result: FilterRule | None (全局规则直接传递)
+        """
+        self.controller.save_global_filter_rule(result)
+        self._update_filter_status()
+
+    def _update_filter_status(self):
+        """更新全局规则状态显示"""
+        if self.controller.state and self.controller.state.global_filter_rule:
+            rule = self.controller.state.global_filter_rule
+            status = "已启用" if rule.enabled else "已禁用"
+            self.lbl_global_filter.setText(f"🌐 全局过滤规则: {status}")
+        else:
+            self.lbl_global_filter.setText("🌐 全局过滤规则: 未配置")
 
     def _clear_worker(self, *args, **kwargs):
         try:

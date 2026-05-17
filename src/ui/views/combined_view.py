@@ -13,11 +13,12 @@ import pandas as pd
 from typing import List, Dict, Tuple, Optional
 
 from src.controllers.project_controller import ProjectController
-from src.data.models import ProjectState, VariableStats, BinningMetrics, BinningConfig
+from src.data.models import ProjectState, VariableStats, BinningMetrics, BinningConfig, FilterMode, FeatureFilterSetting, FilterRule
 from src.services.recommendation_service import recommend_method, method_to_cn
 from src.utils.formatting import format_bin_label, parse_precision_step, resolve_precision_step
 from src.ui.widgets.optbinning_config_panel_compact import OptbinningConfigPanel
 from src.ui.widgets.smart_monotonic_config_panel import SmartMonotonicConfigPanel
+from src.ui.dialogs.filter_rule_dialog import FilterRuleDialog
 from src.core.binning import OPTBINNING_AVAILABLE
 
 # 单调性趋势图标映射
@@ -281,16 +282,16 @@ class CombinedView(QWidget):
         self.batch_btn.setToolTip("Ctrl+点击 或 Shift+点击 选择多个变量")
         self.batch_btn.clicked.connect(self.on_batch_binning)
         self.batch_btn.setEnabled(False)  # 初始禁用，等有选择时启用
-        
+
         self.selection_count_label = QLabel("已选择: 0")
         self.selection_count_label.setStyleSheet("color: #666; font-size: 12px;")
-        
+
         self.batch_btn_layout.addWidget(self.batch_btn)
         self.batch_btn_layout.addWidget(self.selection_count_label)
         self.batch_btn_layout.addStretch()
-        
+
         left_layout.addLayout(self.batch_btn_layout)
-        
+
         # 变量列表 - 启用多选模式
         self.feature_list = QListWidget()
         self.feature_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -506,6 +507,25 @@ class CombinedView(QWidget):
         toolbar_line1.addWidget(QLabel("分箱方法："))
         toolbar_line1.addWidget(self.method_combo)
         toolbar_line1.addStretch()
+
+        # 过滤规则配置按钮（移到右侧工具栏）
+        self.btn_feature_filter = QPushButton("⚙️ 过滤规则")
+        self.btn_feature_filter.setToolTip("为当前选中的指标配置数据过滤规则")
+        self.btn_feature_filter.setStyleSheet("""
+            QPushButton {
+                background: linear-gradient(to bottom, #E8EEF6, #D9E4F5);
+                border: 1px solid #C9D6EA;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: linear-gradient(to bottom, #D9E4F5, #C9D6EA);
+            }
+        """)
+        self.btn_feature_filter.clicked.connect(self._open_feature_filter_dialog)
+        toolbar_line1.addWidget(self.btn_feature_filter)
+
         toolbar_line1.addWidget(self.run_btn)
         toolbar_line1.addWidget(self.save_btn)
         
@@ -775,7 +795,7 @@ class CombinedView(QWidget):
             QMessageBox.critical(self, "错误", msg)
 
     def on_feature_selected(self, item):
-        self.current_feature = item.text()
+        self.current_feature = self._strip_feature_prefix(item.text())
         self.refresh_stats_and_plots()
         # 如果已有分箱结果，渲染结果和配置
         if self.current_feature in self.controller.state.binning_results:
@@ -1039,6 +1059,99 @@ class CombinedView(QWidget):
             config_container = self.config_stack.parentWidget()
             if config_container:
                 config_container.setMaximumHeight(80)
+
+    def _get_current_feature(self) -> Optional[str]:
+        """获取当前选中的单个特征名"""
+        items = self.feature_list.selectedItems()
+        if len(items) == 1:
+            return self._strip_feature_prefix(items[0].text())
+        # 列表未选中时，回退到当前正在查看的指标
+        if self.current_feature:
+            return self._strip_feature_prefix(self.current_feature)
+        return None
+
+    def _strip_feature_prefix(self, text: str) -> str:
+        """去掉特征名前缀图标"""
+        for prefix in ['🌐 ', '⚙️ ', '🚫 ']:
+            if text.startswith(prefix):
+                return text[len(prefix):]
+        return text
+
+    def _open_feature_filter_dialog(self):
+        """打开当前选中指标的规则编辑对话框"""
+        feature = self._get_current_feature()
+        if not feature:
+            QMessageBox.information(self, "提示", "请先在变量列表中选择一个指标")
+            return
+
+        if not self.controller.state:
+            return
+
+        # 获取所有列名和类型
+        all_cols = list(self.controller.df.columns) if self.controller.df is not None else []
+        col_types = {}
+        if self.controller.df is not None:
+            for col in all_cols:
+                dtype = str(self.controller.df[col].dtype)
+                if 'int' in dtype or 'float' in dtype:
+                    col_types[col] = 'numeric'
+                else:
+                    col_types[col] = 'string'
+
+        setting = self.controller.state.feature_filter_settings.get(feature)
+        global_rule = self.controller.state.global_filter_rule
+
+        dialog = FilterRuleDialog(
+            df=self.controller.df,
+            columns=all_cols,
+            column_types=col_types,
+            setting=setting,
+            global_rule=global_rule,
+            feature_name=feature,
+            parent=self
+        )
+        dialog.rule_saved.connect(lambda s, f=feature: self._on_feature_filter_saved(f, s))
+        dialog.exec()
+
+    def _on_feature_filter_saved(self, feature: str, result):
+        """指标规则保存回调
+
+        Args:
+            result: FeatureFilterSetting
+        """
+        self.controller.save_feature_filter_setting(feature, result)
+        # 更新列表图标
+        for i in range(self.feature_list.count()):
+            item = self.feature_list.item(i)
+            item_text = item.text()
+            # 去掉前缀比较
+            clean_text = item_text
+            for prefix in ['🌐 ', '⚙️ ', '🚫 ']:
+                if clean_text.startswith(prefix):
+                    clean_text = clean_text[len(prefix):]
+                    break
+            if clean_text == feature:
+                self._update_feature_item_icon(item, feature, self.controller.state)
+                break
+
+    def _update_feature_item_icon(self, item, feature: str, state: ProjectState):
+        """更新变量列表项的过滤状态图标"""
+        setting = state.feature_filter_settings.get(feature)
+        base_text = feature
+
+        if setting:
+            if setting.mode == FilterMode.CUSTOM:
+                item.setText(f"⚙️ {base_text}")
+                item.setToolTip(f"{base_text}\n使用自定义过滤规则")
+            elif setting.mode == FilterMode.DISABLED:
+                item.setText(f"🚫 {base_text}")
+                item.setToolTip(f"{base_text}\n不参与任何数据过滤")
+            else:
+                item.setText(base_text)
+                item.setToolTip(base_text)
+        else:
+            item.setText(base_text)
+            item.setToolTip(base_text)
 
     def run_binning(self):
         if not self.current_feature: 
