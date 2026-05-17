@@ -476,6 +476,44 @@ class ProjectController(QObject):
         self.dirty = False
         return path
 
+    def get_binned_features(self) -> List[str]:
+        """获取所有已分箱的变量名"""
+        if not self.state:
+            return []
+        return list(self.state.binning_configs.keys())
+
+    def run_cross_binning(
+        self,
+        features: List[str],
+        filters: 'CrossBinningFilters'
+    ) -> 'CrossBinningResult':
+        """执行组合策略分析
+
+        Args:
+            features: 选择的变量名列表
+            filters: 筛选参数
+
+        Returns:
+            CrossBinningResult
+        """
+        from src.core.cross_binning import CrossBinningAnalyzer
+
+        configs = {f: self.state.binning_configs[f] for f in features}
+
+        # 获取各变量过滤后的数据
+        filtered_map = {}
+        for feat in features:
+            filtered_map[feat] = self.get_filtered_data_for_feature(feat)
+
+        return CrossBinningAnalyzer.analyze(
+            df=self.df,
+            target_col=self.state.target_col,
+            features=features,
+            configs=configs,
+            filters=filters,
+            filtered_data_map=filtered_map
+        )
+
     def get_sample_count(self) -> int:
         """获取当前数据样本数"""
         if self.df is not None:

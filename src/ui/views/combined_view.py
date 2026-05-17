@@ -292,6 +292,33 @@ class CombinedView(QWidget):
 
         left_layout.addLayout(self.batch_btn_layout)
 
+        # 组合策略分析入口按钮
+        cross_btn_layout = QHBoxLayout()
+        self.cross_binning_btn = QPushButton("🔀 组合策略分析")
+        self.cross_binning_btn.setToolTip("请先对至少2个变量进行分箱")
+        self.cross_binning_btn.setStyleSheet("""
+            QPushButton {
+                background: linear-gradient(to bottom, #FFF3E0, #FFE0B2);
+                border: 1px solid #FFB74D;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #E65100;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: linear-gradient(to bottom, #FFE0B2, #FFCC80);
+            }
+            QPushButton:disabled {
+                background: #F5F5F5;
+                border-color: #E0E0E0;
+                color: #9E9E9E;
+            }
+        """)
+        self.cross_binning_btn.clicked.connect(self.on_cross_binning)
+        cross_btn_layout.addWidget(self.cross_binning_btn)
+        cross_btn_layout.addStretch()
+        left_layout.addLayout(cross_btn_layout)
+
         # 变量列表 - 启用多选模式
         self.feature_list = QListWidget()
         self.feature_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -581,6 +608,25 @@ class CombinedView(QWidget):
         else:
             self.batch_btn.setText("批量分箱")
 
+    def on_cross_binning(self):
+        """打开组合策略分析对话框"""
+        if not self.controller.state or not self.controller.state.target_col:
+            QMessageBox.warning(self, "提示", "未设置目标变量")
+            return
+
+        binned_count = len(self.controller.state.binning_configs)
+        if binned_count < 2:
+            QMessageBox.information(
+                self, "提示",
+                f"当前只有 {binned_count} 个变量已完成分箱，\n"
+                f"请先对至少2个变量进行分箱后再使用此功能。"
+            )
+            return
+
+        from src.ui.dialogs.cross_binning_dialog import CrossBinningDialog
+        dialog = CrossBinningDialog(self.controller, parent=self)
+        dialog.exec()
+
     def on_batch_binning(self):
         """处理批量分箱按钮点击"""
         selected_items = self.feature_list.selectedItems()
@@ -774,6 +820,20 @@ class CombinedView(QWidget):
         self.controller.binning_finished.connect(self.on_binning_finished)
         self.controller.error_occurred.connect(self.on_error)
 
+    def _update_cross_binning_button_state(self):
+        """刷新组合策略分析按钮的启用状态和提示文本"""
+        state = self.controller.state
+        binned_count = len(state.binning_configs) if state else 0
+        self.cross_binning_btn.setEnabled(binned_count >= 2)
+        if binned_count >= 2:
+            self.cross_binning_btn.setToolTip(
+                f"基于 {binned_count} 个已分箱变量挖掘组合策略"
+            )
+        else:
+            self.cross_binning_btn.setToolTip(
+                f"请先对至少2个变量进行分箱 (当前: {binned_count})"
+            )
+
     def on_project_updated(self, state: ProjectState):
         self.feature_list.clear()
         if state.feature_cols:
@@ -781,6 +841,8 @@ class CombinedView(QWidget):
         # 更新样本数
         if OPTBINNING_AVAILABLE and self.optbinning_config is not None:
             self.optbinning_config.set_n_samples(self.controller.get_sample_count())
+        # 更新组合策略分析按钮状态
+        self._update_cross_binning_button_state()
 
     def on_error(self, msg: str):
         """处理分箱错误，显示友好的提示"""
@@ -1251,11 +1313,15 @@ class CombinedView(QWidget):
         # 注意：controller 已经发送了 binning_finished 信号，on_binning_finished 会被调用
 
     def on_binning_finished(self, feature: str, metrics: BinningMetrics):
-        if feature != self.current_feature: return
+        # 任何变量完成分箱都要刷新按钮状态（不受当前选中变量限制）
+        self._update_cross_binning_button_state()
+
+        if feature != self.current_feature:
+            return
         cfg = self.controller.state.binning_configs[feature]
         self._apply_display_config(cfg)
         self.render_binning(metrics, cfg)
-        
+
         # 检查是否有趋势警告（peak/valley 约束未生效）
         self._check_and_show_trend_warning(cfg)
 
