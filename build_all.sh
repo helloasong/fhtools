@@ -184,16 +184,24 @@ elif [ "$OS" == "macos" ]; then
     if [ -d "dist/FHBinningTool.app" ]; then
         BUILD_SUCCESS=true
         
-        # macOS: 创建 dmg 或 zip
-        SIZE=$(du -sh dist/FHBinningTool.app 2>/dev/null | cut -f1 || echo "unknown")
+        # macOS: 创建包含 .app、安装脚本、启动脚本的发布目录
+        PACKAGE_DIR="dist/FHBinningTool-macos"
+        rm -rf "$PACKAGE_DIR"
+        mkdir -p "$PACKAGE_DIR"
+        cp -R "dist/FHBinningTool.app" "$PACKAGE_DIR/"
+        cp "scripts/install_mac.sh" "$PACKAGE_DIR/install.sh"
+        cp "scripts/start_mac.sh" "$PACKAGE_DIR/start.sh"
+        chmod +x "$PACKAGE_DIR/install.sh" "$PACKAGE_DIR/start.sh"
         
-        # 先创建 zip（最通用）
+        SIZE=$(du -sh "$PACKAGE_DIR" 2>/dev/null | cut -f1 || echo "unknown")
+        
+        # 创建 zip（最通用）
         PACKAGE_NAME="FHBinningTool-v${VERSION}-macos-${ARCH}.zip"
         PACKAGE_PATH="release/${PACKAGE_NAME}"
         
         echo "压缩为 zip 文件..."
         # 使用 ditto 保持 macOS 扩展属性
-        ditto -c -k --keepParent "dist/FHBinningTool.app" "$PACKAGE_PATH"
+        ditto -c -k --keepParent "$PACKAGE_DIR" "$PACKAGE_PATH"
         
         # 尝试创建 DMG（如果 hdiutil 可用）
         if command -v hdiutil &> /dev/null; then
@@ -259,8 +267,8 @@ if [ "$BUILD_SUCCESS" = true ]; then
         
     elif [ "$OS" == "macos" ]; then
         echo "  1. 将 ${PACKAGE_NAME} 发送给用户"
-        echo "  2. 用户解压后拖入应用程序文件夹"
-        echo "  3. 首次运行可能需要在 系统设置 > 隐私与安全性 中允许"
+        echo "  2. 用户解压后运行 install.sh 一键安装并启动"
+        echo "  3. 或直接运行 start.sh 启动当前目录版本"
         
     else
         echo "  1. 将 ${PACKAGE_NAME} 发送给用户"
