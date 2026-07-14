@@ -11,38 +11,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ========== Windows 打包（标准版） ==========
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r requirements.txt
-
-      - name: Build application
-        run: |
-          pyinstaller FHBinningTool_windows.spec
-
-      - name: Upload Windows build
-        uses: actions/upload-artifact@v4
-        with:
-          name: FHBinningTool-windows
-          path: dist/FHBinningTool/
-          retention-days: 30
-
-  # ========== macOS 打包（按需启用） ==========
-  # build-macos:
-  #   runs-on: macos-latest
+  # ========== Windows 打包（标准版，临时关闭） ==========
+  # build-windows:
+  #   runs-on: windows-latest
   #   steps:
   #     - name: Checkout code
   #       uses: actions/checkout@v4
@@ -56,13 +27,38 @@ jobs:
   #         pip install pyinstaller
   #         pip install -r requirements.txt
   #     - name: Build application
-  #       run: bash build_all.sh
-  #     - name: Upload macOS build
+  #       run: |
+  #         pyinstaller FHBinningTool_windows.spec
+  #     - name: Upload Windows build
   #       uses: actions/upload-artifact@v4
   #       with:
-  #         name: FHBinningTool-macos
-  #         path: release/*
+  #         name: FHBinningTool-windows
+  #         path: dist/FHBinningTool/
   #         retention-days: 30
+
+  # ========== macOS 打包（临时启用） ==========
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+      - name: Build application
+        run: bash build_all.sh
+      - name: Upload macOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: FHBinningTool-macos
+          path: release/*
+          retention-days: 30
 
   # ========== Linux 打包（按需启用） ==========
   # build-linux:
